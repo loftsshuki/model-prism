@@ -35,10 +35,9 @@ async function callDirectWithRetry(
         }),
       });
 
-      // 404 = model doesn't exist or no providers available — don't retry
+      // 404 = no provider currently serving this model — don't retry
       if (res.status === 404) {
-        const text = await res.text();
-        throw new Error(`Model unavailable (404)`);
+        throw new Error("No provider online for this model right now");
       }
 
       // 429 = rate limited — wait longer and retry
