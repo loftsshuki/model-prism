@@ -21,9 +21,9 @@ export async function POST(req: NextRequest) {
 
   const startTime = Date.now();
 
-  // 50s timeout — leaves headroom before Vercel's 60s hard limit
+  // 55s timeout — leaves headroom before Vercel's 60s hard limit
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 50000);
+  const timeout = setTimeout(() => controller.abort(), 55000);
 
   try {
     const response = await fetch(
@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
     const isTimeout = error instanceof Error && error.name === "AbortError";
     return NextResponse.json(
       {
-        error: isTimeout ? "Model timed out (50s limit)" : (error instanceof Error ? error.message : "Unknown error"),
+        error: isTimeout ? "Model timed out (55s limit)" : (error instanceof Error ? error.message : "Unknown error"),
         timeMs: Date.now() - startTime,
       },
       { status: isTimeout ? 504 : 500 }

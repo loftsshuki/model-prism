@@ -110,7 +110,7 @@ async function callWithRetry(
   prompt: string,
   apiKey: string,
   maxTokens: number = 4096,
-  maxRetries: number = 2
+  maxRetries: number = 3
 ): Promise<Response> {
   let lastError: Error | null = null;
 
@@ -122,8 +122,9 @@ async function callWithRetry(
         body: JSON.stringify({ model: model.id, content, prompt, apiKey, maxTokens }),
       });
 
-      if (res.status === 429 && attempt < maxRetries) {
-        const delay = (attempt + 1) * 2000 + Math.random() * 1000;
+      // Retry on rate limit, gateway timeout, or provider errors
+      if ((res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504) && attempt < maxRetries) {
+        const delay = (attempt + 1) * 2000 + Math.random() * 2000;
         await sleep(delay);
         continue;
       }

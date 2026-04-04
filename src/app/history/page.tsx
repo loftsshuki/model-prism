@@ -12,6 +12,20 @@ interface RunSummary {
   has_synthesis: number;
 }
 
+function formatDate(raw: string) {
+  try {
+    const d = new Date(raw.includes("T") ? raw : raw + "Z");
+    if (isNaN(d.getTime())) return "";
+    const now = new Date();
+    const diff = now.getTime() - d.getTime();
+    const days = Math.floor(diff / 86400000);
+    if (days === 0) return "Today";
+    if (days === 1) return "Yesterday";
+    if (days < 7) return `${days}d ago`;
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: now.getFullYear() !== d.getFullYear() ? "numeric" : undefined });
+  } catch { return ""; }
+}
+
 export default function HistoryPage() {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -27,30 +41,40 @@ export default function HistoryPage() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100">
-      <header className="border-b border-neutral-800 px-6 py-4">
-        <div className="max-w-4xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <a href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
-                <span className="text-sm font-bold">P</span>
+    <div className="min-h-screen bg-cream text-ink">
+      <header className="bg-green text-cream">
+        <div className="max-w-4xl mx-auto px-6 py-5 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <a href="/" className="flex items-center gap-4 hover:opacity-80 transition-opacity">
+              <div className="w-9 h-9 border border-cream/30 flex items-center justify-center">
+                <span className="font-display text-lg font-bold tracking-tight">P</span>
               </div>
-              <h1 className="text-lg font-semibold">Model Prism</h1>
+              <div>
+                <h1 className="font-display text-xl font-bold tracking-tight leading-none">Model Prism</h1>
+                <p className="text-[10px] tracking-[0.2em] uppercase text-cream/50 mt-0.5">One Input, Many Angles</p>
+              </div>
             </a>
-            <span className="text-neutral-600">/</span>
-            <span className="text-sm text-neutral-400">History</span>
           </div>
+          <nav className="flex items-center gap-6">
+            <a href="/" className="cta-text text-cream/60 hover:text-cream transition-colors duration-300">New Run</a>
+            <span className="cta-text text-cream">History</span>
+          </nav>
         </div>
       </header>
 
-      <div className="max-w-4xl mx-auto p-6">
+      <div className="max-w-4xl mx-auto px-6 py-8">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-8 h-px bg-green" />
+          <span className="overline text-green">Past Runs</span>
+        </div>
+
         {loading && (
-          <div className="text-center text-neutral-600 py-12">Loading...</div>
+          <div className="text-center text-grey-40 py-12">Loading...</div>
         )}
 
         {!loading && runs.length === 0 && (
-          <div className="text-center text-neutral-600 py-12">
-            No runs yet. <a href="/" className="text-violet-400 hover:underline">Start your first analysis.</a>
+          <div className="text-center text-grey-40 py-12">
+            No runs yet. <a href="/" className="text-green hover:underline">Start your first analysis.</a>
           </div>
         )}
 
@@ -60,23 +84,26 @@ export default function HistoryPage() {
               <a
                 key={run.id}
                 href={`/runs/${run.id}`}
-                className="block rounded-lg border border-neutral-800 bg-neutral-900 p-4 hover:border-neutral-700 transition-colors"
+                className="block border border-border bg-white p-4 hover:border-green/30 transition-colors duration-300"
               >
-                <div className="flex items-start justify-between">
+                <div className="flex items-start justify-between gap-4">
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm text-neutral-200 line-clamp-1">
+                    <p className="text-sm text-ink line-clamp-1 font-medium">
                       {run.prompt}
                     </p>
-                    <p className="text-xs text-neutral-500 mt-1 line-clamp-1">
+                    <p className="text-xs text-grey-40 mt-1 line-clamp-1">
                       {run.content}
                     </p>
                   </div>
-                  <div className="flex items-center gap-3 ml-4 shrink-0 text-xs text-neutral-500">
-                    <span>{run.response_count} models</span>
+                  <div className="flex items-center gap-4 ml-4 shrink-0">
+                    <span className="text-[10px] tracking-wide uppercase text-grey-40">{run.response_count} models</span>
                     {run.has_synthesis > 0 && (
-                      <span className="text-violet-400">synthesized</span>
+                      <span className="text-[10px] tracking-wide uppercase text-gold">synthesized</span>
                     )}
-                    <span>{new Date(run.created_at + "Z").toLocaleDateString()}</span>
+                    {run.total_cost > 0 && (
+                      <span className="text-[10px] tracking-wide text-grey-30">${run.total_cost.toFixed(4)}</span>
+                    )}
+                    <span className="text-[10px] tracking-wide text-grey-30">{formatDate(run.created_at)}</span>
                   </div>
                 </div>
               </a>

@@ -48,6 +48,7 @@ export default function Home() {
   const [responses, setResponses] = useState<Map<string, ModelResponse>>(new Map());
   const [status, setStatus] = useState<RunState["status"]>("idle");
   const [synthesis, setSynthesis] = useState<SynthesisResult | null>(null);
+  const [synthesisError, setSynthesisError] = useState<string | null>(null);
   const [compareIds, setCompareIds] = useState<Set<string>>(new Set());
   const [showCompare, setShowCompare] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -152,6 +153,7 @@ export default function Home() {
     async (runId: string, completedResponses: ModelResponse[]) => {
       if (!anthropicKey) { setStatus("complete"); return; }
       setStatus("synthesizing");
+      setSynthesisError(null);
       const successful = completedResponses.filter((r) => r.status === "complete" && r.response);
       if (successful.length < 2) { setStatus("complete"); return; }
       const responsesForSynthesis = successful.map((r) => {
@@ -164,8 +166,18 @@ export default function Home() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ runId, content, analysisPrompt: prompt, responses: responsesForSynthesis, synthesisModel, anthropicKey }),
         });
-        if (res.ok) { const data = await res.json(); setSynthesis(data.synthesis); }
-      } catch (error) { console.error("Synthesis failed:", error); }
+        if (res.ok) {
+          const data = await res.json();
+          setSynthesis(data.synthesis);
+        } else {
+          let errMsg = `Synthesis failed (HTTP ${res.status})`;
+          try { const err = await res.json(); errMsg = err.error || errMsg; } catch {}
+          setSynthesisError(errMsg);
+        }
+      } catch (error) {
+        console.error("Synthesis failed:", error);
+        setSynthesisError(error instanceof Error ? error.message : "Network error during synthesis");
+      }
       setStatus("complete");
     },
     [anthropicKey, content, prompt, synthesisModel, allModels]
@@ -193,6 +205,7 @@ export default function Home() {
 
     setStatus("running");
     setSynthesis(null);
+    setSynthesisError(null);
     setRunStartTime(Date.now());
     setElapsed(0);
 
@@ -507,13 +520,18 @@ export default function Home() {
                   {status === "complete" && (
                     <div className="flex items-center gap-2">
                       {!synthesis && anthropicKey && successCount >= 2 && (
-                        <button onClick={() => runSynthesis(
-                          "manual",
-                          [...responses.values()].filter((r) => r.status === "complete")
-                        )}
-                          className="cta-text px-5 py-2 bg-green text-cream hover:bg-green-hover transition-colors duration-300">
-                          Synthesize All
-                        </button>
+                        <div className="flex items-center gap-3">
+                          <button onClick={() => { setSynthesisError(null); runSynthesis(
+                            "manual",
+                            [...responses.values()].filter((r) => r.status === "complete")
+                          ); }}
+                            className="cta-text px-5 py-2 bg-green text-cream hover:bg-green-hover transition-colors duration-300">
+                            {synthesisError ? "Retry Synthesis" : "Synthesize All"}
+                          </button>
+                          {synthesisError && (
+                            <span className="text-xs text-red-600">{synthesisError}</span>
+                          )}
+                        </div>
                       )}
                       {!synthesis && !anthropicKey && (
                         <button onClick={() => setShowKeyInput(true)}
