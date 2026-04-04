@@ -49,7 +49,7 @@ export function getModelsFilteredByContext(models: ModelInfo[], inputTokens: num
   return { available, tooSmall };
 }
 
-export function estimateCost(models: ModelInfo[], inputTokens: number, outputTokens: number = 600): number {
+export function estimateCost(models: ModelInfo[], inputTokens: number, outputTokens: number = 4096): number {
   return models.reduce((total, m) => {
     return total + (m.inputCostPer1k * inputTokens / 1000) + (m.outputCostPer1k * outputTokens / 1000);
   }, 0);

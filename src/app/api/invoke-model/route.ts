@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
-  const { model, content, prompt, apiKey } = await req.json();
+  const { model, content, prompt, apiKey, maxTokens } = await req.json();
 
   if (!apiKey) {
     return NextResponse.json(
@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
         },
         body: JSON.stringify({
           model,
-          max_tokens: 600,
+          max_tokens: maxTokens || 4096,
           messages: [
             {
               role: "user",

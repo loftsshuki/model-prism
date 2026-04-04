@@ -31,6 +31,7 @@ async function callWithRetry(
   content: string,
   prompt: string,
   apiKey: string,
+  maxTokens: number = 4096,
   maxRetries: number = 2
 ): Promise<Response> {
   let lastError: Error | null = null;
@@ -40,7 +41,7 @@ async function callWithRetry(
       const res = await fetch("/api/invoke-model", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: model.id, content, prompt, apiKey }),
+        body: JSON.stringify({ model: model.id, content, prompt, apiKey, maxTokens }),
       });
 
       // Retry on 429 (rate limit) — exponential backoff
@@ -69,6 +70,7 @@ export async function invokeModel(
   prompt: string,
   apiKey: string,
   runId: string | null,
+  maxTokens: number,
   onUpdate: (response: ModelResponse) => void
 ): Promise<ModelResponse> {
   const result: ModelResponse = {
@@ -80,7 +82,7 @@ export async function invokeModel(
   onUpdate(result);
 
   try {
-    const res = await callWithRetry(model, content, prompt, apiKey);
+    const res = await callWithRetry(model, content, prompt, apiKey, maxTokens);
 
     if (!res.ok) {
       let errMsg = `HTTP ${res.status}`;
@@ -120,11 +122,12 @@ export function fanOut(
   prompt: string,
   apiKey: string,
   runId: string | null,
+  maxTokens: number,
   onUpdate: (modelId: string, response: ModelResponse) => void
 ): Promise<ModelResponse[]> {
   const promises = models.map((model) =>
     limit(() =>
-      invokeModel(model, content, prompt, apiKey, runId, (resp) =>
+      invokeModel(model, content, prompt, apiKey, runId, maxTokens, (resp) =>
         onUpdate(model.id, resp)
       )
     )

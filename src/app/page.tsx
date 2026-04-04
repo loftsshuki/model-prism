@@ -183,7 +183,7 @@ export default function Home() {
     const onUpdate = (modelId: string, response: ModelResponse) => {
       setResponses((prev) => { const next = new Map(prev); next.set(modelId, response); return next; });
     };
-    const results = await fanOut(models, content, prompt, apiKey, runId, onUpdate);
+    const results = await fanOut(models, content, prompt, apiKey, runId, 4096, onUpdate);
     await runSynthesis(runId, results);
   }, [content, prompt, selectedModels, apiKey, allModels, runSynthesis]);
 
