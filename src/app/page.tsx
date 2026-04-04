@@ -256,7 +256,7 @@ export default function Home() {
       {/* Main Content */}
       <div className="flex-1 flex">
         {/* Left Sidebar — Input */}
-        <aside className="w-[440px] shrink-0 border-r border-border bg-white overflow-y-auto">
+        <aside className="w-1/2 shrink-0 border-r border-border bg-white overflow-y-auto">
           <div className="p-6 lg:p-8 space-y-6">
             {/* Section: Content */}
             <div>
