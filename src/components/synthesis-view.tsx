@@ -1,6 +1,7 @@
 "use client";
 
 import { SynthesisResult } from "@/lib/types";
+import { ThemeHeatmap } from "./theme-heatmap";
 
 interface SynthesisViewProps {
   synthesis: SynthesisResult;
@@ -86,6 +87,10 @@ export function SynthesisView({ synthesis }: SynthesisViewProps) {
             ))}
           </ul>
         </div>
+      )}
+
+      {synthesis.themeMatrix && synthesis.themeMatrix.length > 0 && (
+        <ThemeHeatmap themeMatrix={synthesis.themeMatrix} />
       )}
     </div>
   );

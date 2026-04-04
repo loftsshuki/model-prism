@@ -50,4 +50,8 @@ export interface SynthesisResult {
     }>;
   }>;
   blindSpots: string[];
+  themeMatrix?: Array<{
+    theme: string;
+    scores: Record<string, number>;
+  }>;
 }

@@ -30,6 +30,13 @@ export const SynthesisSchema = z.object({
   ).describe("Topics where models actively contradict each other"),
 
   blindSpots: z.array(z.string()).describe("Aspects of the prompt that most models ignored or underexplored"),
+
+  themeMatrix: z.array(
+    z.object({
+      theme: z.string().describe("A major theme or topic from the analysis"),
+      scores: z.record(z.string(), z.number().min(0).max(3)).describe("Map of model name to coverage score: 0=not mentioned, 1=briefly mentioned, 2=discussed, 3=deeply analyzed"),
+    })
+  ).describe("For each major theme identified across all responses, rate how thoroughly each model covered it (0-3). Use model names (not IDs) as keys. Include 4-8 themes."),
 });
 
 export type SynthesisResult = z.infer<typeof SynthesisSchema>;
@@ -66,5 +73,7 @@ ${responsesXml}
 
 IMPORTANT: When calculating consensus, weight by distinct base architecture — multiple variants of the same model family (e.g., 3 Llama models) count as 1 vote, not 3.
 
-Identify what's genuinely interesting: where do models converge? What did only one model notice that others missed? Where do they flatly disagree? What did the prompt ask about that models mostly skipped?`;
+Identify what's genuinely interesting: where do models converge? What did only one model notice that others missed? Where do they flatly disagree? What did the prompt ask about that models mostly skipped?
+
+For the themeMatrix: identify 4-8 major themes across all responses. For each theme, score every model 0-3 on how thoroughly they covered it (0=not mentioned, 1=briefly mentioned, 2=discussed, 3=deeply analyzed). Use model display names as keys.`;
 }

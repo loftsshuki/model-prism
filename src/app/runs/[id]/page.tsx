@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { SynthesisResult } from "@/lib/types";
 import { SynthesisView } from "@/components/synthesis-view";
 import { ResponseCard } from "@/components/response-card";
@@ -12,6 +12,7 @@ interface SavedRun {
   prompt: string;
   total_cost: number;
   created_at: string;
+  models: string[];
   responses: Array<{
     model: string;
     model_name: string;
@@ -26,8 +27,101 @@ interface SavedRun {
   synthesisModel: string | null;
 }
 
+function exportToMarkdown(run: SavedRun): string {
+  const lines: string[] = [];
+  lines.push(`# Model Prism Run — ${new Date(run.created_at + "Z").toLocaleString()}`);
+  lines.push("");
+  lines.push(`## Prompt`);
+  lines.push(run.prompt);
+  lines.push("");
+  lines.push(`## Content`);
+  lines.push(run.content);
+  lines.push("");
+
+  if (run.synthesis) {
+    lines.push(`## Synthesis`);
+    lines.push("");
+
+    if (run.synthesis.consensus.length > 0) {
+      lines.push(`### Consensus`);
+      run.synthesis.consensus.forEach((c) => {
+        lines.push(`- **[${c.strength}]** ${c.point} _(${c.supportingModels.length} models)_`);
+      });
+      lines.push("");
+    }
+
+    if (run.synthesis.uniqueInsights.length > 0) {
+      lines.push(`### Unique Insights`);
+      run.synthesis.uniqueInsights.forEach((u) => {
+        lines.push(`- **${u.model}** [${u.significance}]: ${u.insight}`);
+      });
+      lines.push("");
+    }
+
+    if (run.synthesis.disagreements.length > 0) {
+      lines.push(`### Disagreements`);
+      run.synthesis.disagreements.forEach((d) => {
+        lines.push(`**${d.topic}**`);
+        d.positions.forEach((p) => {
+          lines.push(`  - [${p.models.join(", ")}]: ${p.position}`);
+        });
+      });
+      lines.push("");
+    }
+
+    if (run.synthesis.blindSpots.length > 0) {
+      lines.push(`### Blind Spots`);
+      run.synthesis.blindSpots.forEach((b) => {
+        lines.push(`- ${b}`);
+      });
+      lines.push("");
+    }
+
+    if (run.synthesis.themeMatrix && run.synthesis.themeMatrix.length > 0) {
+      lines.push(`### Theme Coverage`);
+      const models = [...new Set(run.synthesis.themeMatrix.flatMap((t) => Object.keys(t.scores)))];
+      lines.push(`| Theme | ${models.join(" | ")} |`);
+      lines.push(`| --- | ${models.map(() => "---").join(" | ")} |`);
+      run.synthesis.themeMatrix.forEach((t) => {
+        const scores = models.map((m) => String(t.scores[m] ?? 0));
+        lines.push(`| ${t.theme} | ${scores.join(" | ")} |`);
+      });
+      lines.push("");
+    }
+  }
+
+  lines.push(`## Individual Responses`);
+  lines.push("");
+  run.responses.forEach((r) => {
+    lines.push(`### ${r.model_name || r.model}`);
+    if (r.time_ms) lines.push(`_${(r.time_ms / 1000).toFixed(1)}s · ${r.output_tokens ?? "?"} tokens_`);
+    lines.push("");
+    if (r.error) {
+      lines.push(`> Error: ${r.error}`);
+    } else {
+      lines.push(r.response ?? "_(no response)_");
+    }
+    lines.push("");
+    lines.push("---");
+    lines.push("");
+  });
+
+  return lines.join("\n");
+}
+
+function downloadMarkdown(content: string, filename: string) {
+  const blob = new Blob([content], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function RunPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const [run, setRun] = useState<SavedRun | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -47,6 +141,26 @@ export default function RunPage() {
         setLoading(false);
       });
   }, [id]);
+
+  const handleRerun = () => {
+    if (!run) return;
+    // Store rerun data in sessionStorage so the home page can pick it up
+    sessionStorage.setItem(
+      "rerun",
+      JSON.stringify({
+        content: run.content,
+        prompt: run.prompt,
+      })
+    );
+    router.push("/");
+  };
+
+  const handleExport = () => {
+    if (!run) return;
+    const md = exportToMarkdown(run);
+    const date = new Date(run.created_at + "Z").toISOString().slice(0, 10);
+    downloadMarkdown(md, `model-prism-${date}-${run.id.slice(0, 8)}.md`);
+  };
 
   if (loading) {
     return (
@@ -78,9 +192,23 @@ export default function RunPage() {
             <span className="text-neutral-600">/</span>
             <span className="text-sm text-neutral-400">Run</span>
           </div>
-          <a href="/history" className="text-xs text-neutral-500 hover:text-neutral-300">
-            History
-          </a>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleExport}
+              className="text-xs px-3 py-1.5 rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 transition-colors"
+            >
+              Export .md
+            </button>
+            <button
+              onClick={handleRerun}
+              className="text-xs px-3 py-1.5 rounded-lg bg-violet-600 text-white hover:bg-violet-500 transition-colors"
+            >
+              Re-run with different models
+            </button>
+            <a href="/history" className="text-xs text-neutral-500 hover:text-neutral-300">
+              History
+            </a>
+          </div>
         </div>
       </header>
 

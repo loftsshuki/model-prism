@@ -61,6 +61,17 @@ export default function Home() {
   useEffect(() => {
     setCustomTemplates(getCustomTemplates());
 
+    // Check for rerun data from a saved run
+    const rerunData = sessionStorage.getItem("rerun");
+    if (rerunData) {
+      try {
+        const { content: rerunContent, prompt: rerunPrompt } = JSON.parse(rerunData);
+        if (rerunContent) setContent(rerunContent);
+        if (rerunPrompt) setPrompt(rerunPrompt);
+      } catch {}
+      sessionStorage.removeItem("rerun");
+    }
+
     const key = localStorage.getItem("openrouter-api-key") || "";
     const headers: Record<string, string> = {};
     if (key) headers["x-openrouter-key"] = key;
