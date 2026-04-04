@@ -2,7 +2,7 @@ export interface ModelInfo {
   id: string;
   name: string;
   family: string;
-  tier: "frontier" | "strong" | "fast";
+  tier: "frontier" | "strong" | "fast" | "free";
   contextLength: number;
   inputCostPer1k: number;
   outputCostPer1k: number;

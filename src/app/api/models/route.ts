@@ -42,11 +42,45 @@ function detectFamily(id: string): string {
   return "other";
 }
 
-function detectTier(pricing: { prompt: string; completion: string }, contextLength: number): "frontier" | "strong" | "fast" {
-  const inputCost = parseFloat(pricing.prompt) * 1000; // cost per 1k tokens
-  if (inputCost >= 0.002 || contextLength >= 200000) return "frontier";
-  if (inputCost >= 0.0005) return "strong";
+function detectTier(pricing: { prompt: string; completion: string }, contextLength: number): "frontier" | "strong" | "fast" | "free" {
+  const inputCost = parseFloat(pricing.prompt);
+  const outputCost = parseFloat(pricing.completion);
+  // Free models: both input and output cost are 0
+  if (inputCost === 0 && outputCost === 0) return "free";
+  const costPer1k = inputCost * 1000;
+  if (costPer1k >= 0.002 || contextLength >= 200000) return "frontier";
+  if (costPer1k >= 0.0005) return "strong";
   return "fast";
+}
+
+// Filter out non-text models (image gen, video, audio, embedding, moderation)
+function isTextModel(m: OpenRouterModel): boolean {
+  const id = m.id.toLowerCase();
+  const name = (m.name || "").toLowerCase();
+
+  // Exclude by modality
+  if (m.architecture?.modality === "image" || m.architecture?.modality === "audio") return false;
+
+  // Exclude image generation models
+  if (id.includes("dall-e") || id.includes("stable-diffusion") || id.includes("sdxl") ||
+      id.includes("midjourney") || id.includes("flux") || id.includes("imagen")) return false;
+
+  // Exclude video models
+  if (id.includes("sora") || id.includes("runway") || id.includes("kling") ||
+      id.includes("pika") || id.includes("gen-3") || id.includes("video") ||
+      name.includes("video")) return false;
+
+  // Exclude audio/speech models
+  if (id.includes("whisper") || id.includes("tts") || id.includes("speech") ||
+      id.includes("audio") || name.includes("audio") || name.includes("speech")) return false;
+
+  // Exclude embedding models
+  if (id.includes("embed") || name.includes("embed")) return false;
+
+  // Exclude moderation models
+  if (id.includes("moderation") || id.includes("shield") || id.includes("guard")) return false;
+
+  return true;
 }
 
 export async function GET(req: NextRequest) {
@@ -83,10 +117,8 @@ export async function GET(req: NextRequest) {
       .filter((m: OpenRouterModel) => {
         const pricing = m.pricing;
         if (!pricing) return false;
-        // Exclude vision-only, image gen, embedding models
-        if (m.architecture?.modality === "image" || m.architecture?.modality === "audio") return false;
-        // Must have both prompt and completion pricing
         if (!pricing.prompt || !pricing.completion) return false;
+        if (!isTextModel(m)) return false;
         return true;
       })
       .map((m: OpenRouterModel) => ({
@@ -99,7 +131,7 @@ export async function GET(req: NextRequest) {
         outputCostPer1k: parseFloat(m.pricing.completion) * 1000,
       }))
       .sort((a: { tier: string; inputCostPer1k: number }, b: { tier: string; inputCostPer1k: number }) => {
-        const tierOrder = { frontier: 0, strong: 1, fast: 2 };
+        const tierOrder = { frontier: 0, strong: 1, fast: 2, free: 3 };
         const tierDiff = tierOrder[a.tier as keyof typeof tierOrder] - tierOrder[b.tier as keyof typeof tierOrder];
         if (tierDiff !== 0) return tierDiff;
         return b.inputCostPer1k - a.inputCostPer1k;

@@ -129,9 +129,11 @@ export default function Home() {
     });
   };
 
-  const handleSelectPreset = (preset: "frontier" | "diverse" | "all") => {
+  const handleSelectPreset = (preset: "frontier" | "diverse" | "all" | "free") => {
     const available = allModels.filter((m) => !tooSmall.has(m.id));
-    if (preset === "frontier") {
+    if (preset === "free") {
+      setSelectedModels(new Set(available.filter((m) => m.tier === "free").map((m) => m.id)));
+    } else if (preset === "frontier") {
       setSelectedModels(new Set(available.filter((m) => m.tier === "frontier").map((m) => m.id)));
     } else if (preset === "diverse") {
       // One per family per tier

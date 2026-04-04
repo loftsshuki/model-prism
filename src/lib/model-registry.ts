@@ -20,6 +20,7 @@ export const TIERS: Array<{ key: ModelInfo["tier"]; label: string; color: string
   { key: "frontier", label: "Frontier", color: "violet" },
   { key: "strong", label: "Strong", color: "blue" },
   { key: "fast", label: "Fast", color: "emerald" },
+  { key: "free", label: "Free", color: "green" },
 ];
 
 export function estimateTokens(text: string): number {

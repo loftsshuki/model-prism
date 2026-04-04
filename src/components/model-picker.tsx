@@ -12,7 +12,7 @@ interface ModelPickerProps {
   onSelectTier: (tier: ModelInfo["tier"]) => void;
   onSelectAll: () => void;
   onClearAll: () => void;
-  onSelectPreset: (preset: "frontier" | "diverse" | "all") => void;
+  onSelectPreset: (preset: "frontier" | "diverse" | "all" | "free") => void;
 }
 
 export function ModelPicker({
@@ -60,6 +60,12 @@ export function ModelPicker({
           className="text-[10px] px-2 py-1 rounded bg-blue-500/10 border border-blue-500/20 text-blue-300 hover:bg-blue-500/20 transition-colors"
         >
           Diverse Sweep
+        </button>
+        <button
+          onClick={() => onSelectPreset("free")}
+          className="text-[10px] px-2 py-1 rounded bg-green-500/10 border border-green-500/20 text-green-300 hover:bg-green-500/20 transition-colors"
+        >
+          Free Only
         </button>
         <button
           onClick={() => onSelectPreset("all")}
@@ -118,7 +124,7 @@ export function ModelPicker({
                       <span className="block truncate">{model.name}</span>
                       <div className="flex justify-between text-[10px] text-neutral-600 mt-0.5">
                         <span>{model.family}</span>
-                        <span>${(model.inputCostPer1k * 1).toFixed(4)}/1k</span>
+                        <span>{model.inputCostPer1k === 0 && model.outputCostPer1k === 0 ? "free" : `$${(model.inputCostPer1k * 1).toFixed(4)}/1k`}</span>
                       </div>
                     </button>
                   );
