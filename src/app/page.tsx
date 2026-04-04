@@ -232,6 +232,41 @@ export default function Home() {
     setStatus("complete");
   }, []);
 
+  const handleRetryFailed = useCallback(async () => {
+    if (!apiKey) return;
+    const failedModels = allModels.filter((m) => {
+      const r = responses.get(m.id);
+      return r && r.status === "error" && !r.error?.includes("404") && !r.error?.includes("unavailable");
+    });
+    if (failedModels.length === 0) return;
+
+    const runId = currentRunId || generateId();
+    setStatus("running");
+    setRunStartTime(Date.now());
+    setElapsed(0);
+    abortRef.current = false;
+    setAborted(false);
+
+    // Reset failed models to pending
+    setResponses((prev) => {
+      const next = new Map(prev);
+      failedModels.forEach((m) => { next.set(m.id, { model: m.id, modelName: m.name, status: "pending" }); });
+      return next;
+    });
+
+    const onUpdate = (modelId: string, response: ModelResponse) => {
+      setResponses((prev) => { const next = new Map(prev); next.set(modelId, response); return next; });
+    };
+
+    const newResults = await fanOut(failedModels, content, prompt, apiKey, runId, 4096, () => abortRef.current, onUpdate);
+
+    const allCompleted = [
+      ...[...responses.values()].filter((r) => r.status === "complete" && !failedModels.find((m) => m.id === r.model)),
+      ...newResults,
+    ];
+    await runSynthesis(runId, allCompleted);
+  }, [apiKey, allModels, responses, currentRunId, content, prompt, runSynthesis]);
+
   const completedCount = [...responses.values()].filter((r) => r.status === "complete" || r.status === "error").length;
   const totalCount = responses.size;
   const successCount = [...responses.values()].filter((r) => r.status === "complete").length;
@@ -239,6 +274,7 @@ export default function Home() {
 
   // How many selected models haven't been run yet
   const alreadyCompleted = new Set([...responses.keys()].filter((id) => responses.get(id)?.status === "complete"));
+  const retryableCount = [...responses.values()].filter((r) => r.status === "error" && !r.error?.includes("404") && !r.error?.includes("unavailable")).length;
   const newModelsCount = [...selectedModels].filter((id) => !alreadyCompleted.has(id)).length;
 
   // Timer
@@ -483,6 +519,12 @@ export default function Home() {
                         <button onClick={() => setShowKeyInput(true)}
                           className="cta-text px-5 py-2 border border-green text-green hover:bg-green-light transition-colors duration-300">
                           Add Anthropic Key to Synthesize
+                        </button>
+                      )}
+                      {retryableCount > 0 && (
+                        <button onClick={handleRetryFailed}
+                          className="cta-text px-5 py-2 border border-gold text-gold hover:bg-gold/10 transition-colors duration-300">
+                          Retry {retryableCount} Failed
                         </button>
                       )}
                       {successCount >= 1 && (
