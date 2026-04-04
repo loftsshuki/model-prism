@@ -50,6 +50,7 @@ export default function Home() {
   const [synthesis, setSynthesis] = useState<SynthesisResult | null>(null);
   const [compareIds, setCompareIds] = useState<Set<string>>(new Set());
   const [showCompare, setShowCompare] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [customTemplates, setCustomTemplates] = useState<PromptTemplate[]>([]);
 
   const allTemplates = useMemo(() => [...DEFAULT_TEMPLATES, ...customTemplates], [customTemplates]);
@@ -395,6 +396,21 @@ export default function Home() {
                         <button onClick={() => setShowKeyInput(true)}
                           className="cta-text px-5 py-2 border border-green text-green hover:bg-green-light transition-colors duration-300">
                           Add Anthropic Key to Synthesize
+                        </button>
+                      )}
+                      {successCount >= 1 && (
+                        <button onClick={() => {
+                          const successful = [...responses.values()].filter((r) => r.status === "complete" && r.response);
+                          const output = successful.map((r) =>
+                            `=== ${r.modelName} ===\n${r.response}`
+                          ).join("\n\n---\n\n");
+                          const header = `PROMPT: ${prompt}\n\nCONTENT:\n${content}\n\n${"=".repeat(60)}\n${successful.length} MODEL RESPONSES:\n${"=".repeat(60)}\n\n`;
+                          navigator.clipboard.writeText(header + output);
+                          setCopied(true);
+                          setTimeout(() => setCopied(false), 2000);
+                        }}
+                          className="cta-text px-5 py-2 border border-border text-grey-50 hover:border-green hover:text-green transition-colors duration-300">
+                          {copied ? "Copied!" : "Copy All to Clipboard"}
                         </button>
                       )}
                       {compareIds.size >= 2 && (
