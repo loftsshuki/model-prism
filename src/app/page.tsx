@@ -142,7 +142,7 @@ export default function Home() {
     setCompareIds((prev) => {
       const next = new Set(prev);
       if (next.has(modelId)) next.delete(modelId);
-      else if (next.size < 3) next.add(modelId);
+      else next.add(modelId);
       return next;
     });
   };
@@ -380,11 +380,30 @@ export default function Home() {
                     </div>
                   )}
 
-                  {status === "complete" && compareIds.size >= 2 && (
-                    <button onClick={() => setShowCompare(true)}
-                      className="cta-text px-5 py-2 bg-green text-cream hover:bg-green-hover transition-colors duration-300">
-                      Compare ({compareIds.size})
-                    </button>
+                  {status === "complete" && (
+                    <div className="flex items-center gap-2">
+                      {!synthesis && anthropicKey && successCount >= 2 && (
+                        <button onClick={() => runSynthesis(
+                          "manual",
+                          [...responses.values()].filter((r) => r.status === "complete")
+                        )}
+                          className="cta-text px-5 py-2 bg-green text-cream hover:bg-green-hover transition-colors duration-300">
+                          Synthesize All
+                        </button>
+                      )}
+                      {!synthesis && !anthropicKey && (
+                        <button onClick={() => setShowKeyInput(true)}
+                          className="cta-text px-5 py-2 border border-green text-green hover:bg-green-light transition-colors duration-300">
+                          Add Anthropic Key to Synthesize
+                        </button>
+                      )}
+                      {compareIds.size >= 2 && (
+                        <button onClick={() => setShowCompare(true)}
+                          className="cta-text px-5 py-2 border border-border text-grey-50 hover:border-green hover:text-green transition-colors duration-300">
+                          Compare ({compareIds.size})
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
 

@@ -32,6 +32,7 @@ export interface RunState {
 }
 
 export interface SynthesisResult {
+  masterDocument?: string;
   consensus: Array<{
     point: string;
     supportingModels: string[];

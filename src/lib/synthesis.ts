@@ -1,10 +1,14 @@
 import { z } from "zod";
 
 export const SynthesisSchema = z.object({
+  masterDocument: z.string().describe(
+    "The definitive, actionable synthesis document. Written as a single coherent piece that incorporates the best insights from ALL model responses. Not a summary — a master version that someone can act on immediately. Use markdown formatting with headers, bullets, and bold for emphasis. This should be significantly better than any individual model's response because it cherry-picks the best insights from each."
+  ),
+
   consensus: z.array(
     z.object({
       point: z.string().describe("A specific point most models agree on"),
-      supportingModels: z.array(z.string()).describe("Model IDs that support this point"),
+      supportingModels: z.array(z.string()).describe("Model names that support this point"),
       strength: z.enum(["strong", "moderate", "weak"]).describe("How strong the agreement is"),
     })
   ).describe("Points that 60%+ of distinct model architectures agree on"),
@@ -15,7 +19,7 @@ export const SynthesisSchema = z.object({
       insight: z.string().describe("The unique insight"),
       significance: z.enum(["high", "medium", "low"]).describe("How significant this insight is"),
     })
-  ).describe("Valuable insights raised by only 1-2 models"),
+  ).describe("Valuable insights raised by only 1-2 models — the gold that justifies running many models"),
 
   disagreements: z.array(
     z.object({
@@ -46,7 +50,7 @@ export function buildSynthesisPrompt(
   analysisPrompt: string,
   responses: Array<{ model: string; modelName: string; family: string; response: string }>
 ): string {
-  const truncatedContent = content.length > 2000 ? content.slice(0, 2000) + "..." : content;
+  const truncatedContent = content.length > 4000 ? content.slice(0, 4000) + "..." : content;
 
   const responsesXml = responses
     .map(
@@ -57,9 +61,9 @@ export function buildSynthesisPrompt(
 
   const families = [...new Set(responses.map((r) => r.family))];
 
-  return `You are analyzing responses from ${responses.length} AI models (across ${families.length} distinct architectures: ${families.join(", ")}) to the same prompt.
+  return `You have ${responses.length} AI model responses (across ${families.length} distinct architectures: ${families.join(", ")}) to the same analysis prompt.
 
-<original_content truncated="true">
+<original_content>
 ${truncatedContent}
 </original_content>
 
@@ -71,9 +75,17 @@ ${analysisPrompt}
 ${responsesXml}
 </responses>
 
-IMPORTANT: When calculating consensus, weight by distinct base architecture — multiple variants of the same model family (e.g., 3 Llama models) count as 1 vote, not 3.
+Your primary job is to produce a MASTER DOCUMENT — a single, definitive, actionable synthesis that is better than any individual response. This is not a summary. It is the best possible version of the analysis, cherry-picking the strongest insights from every model and weaving them into one coherent document.
 
-Identify what's genuinely interesting: where do models converge? What did only one model notice that others missed? Where do they flatly disagree? What did the prompt ask about that models mostly skipped?
+Rules for the masterDocument:
+- Write it as if YOU are the expert delivering the analysis — don't say "Model X said..."
+- Incorporate the best points from ALL responses, not just the first few
+- If only one model caught something important, include it — that's the whole point of running many models
+- Use markdown: ## headers for sections, **bold** for key points, bullet lists for actionable items
+- Be thorough — this should be significantly longer and more useful than any single model's response
+- End with a prioritized action list
 
-For the themeMatrix: identify 4-8 major themes across all responses. For each theme, score every model 0-3 on how thoroughly they covered it (0=not mentioned, 1=briefly mentioned, 2=discussed, 3=deeply analyzed). Use model display names as keys.`;
+For consensus/disagreements/uniqueInsights: weight by distinct base architecture — 3 Llama variants agreeing = 1 vote, not 3.
+
+For themeMatrix: identify 4-8 major themes, score every model 0-3 on coverage depth. Use model display names as keys.`;
 }
