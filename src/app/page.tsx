@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { ModelInfo, ModelResponse, RunState, SynthesisResult } from "@/lib/types";
 import { FALLBACK_MODELS, estimateTokens, getModelsFilteredByContext, estimateCost } from "@/lib/model-registry";
 import { DEFAULT_TEMPLATES, PromptTemplate } from "@/lib/prompts";
@@ -171,27 +171,100 @@ export default function Home() {
     [anthropicKey, content, prompt, synthesisModel, allModels]
   );
 
+  const [currentRunId, setCurrentRunId] = useState<string | null>(null);
+  const [aborted, setAborted] = useState(false);
+  const abortRef = useRef(false);
+
   const handleRun = useCallback(async () => {
     if (!content.trim() || !prompt.trim() || selectedModels.size === 0) return;
     if (!apiKey) { setShowKeyInput(true); return; }
-    setStatus("running"); setResponses(new Map()); setSynthesis(null); setCompareIds(new Set());
-    const runId = generateId();
-    const models = allModels.filter((m) => selectedModels.has(m.id));
-    try { await fetch("/api/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: runId, content, prompt, models: models.map((m) => m.id) }) }); } catch {}
-    const initial = new Map<string, ModelResponse>();
-    models.forEach((m) => { initial.set(m.id, { model: m.id, modelName: m.name, status: "pending" }); });
-    setResponses(new Map(initial));
+
+    // Determine which models still need to run
+    const alreadyRan = new Set([...responses.keys()].filter((id) => {
+      const r = responses.get(id);
+      return r && r.status === "complete";
+    }));
+    const modelsToRun = allModels.filter((m) => selectedModels.has(m.id) && !alreadyRan.has(m.id));
+
+    if (modelsToRun.length === 0) return;
+
+    const isAppending = responses.size > 0 && alreadyRan.size > 0;
+    const runId = isAppending && currentRunId ? currentRunId : generateId();
+
+    setStatus("running");
+    setSynthesis(null);
+    setRunStartTime(Date.now());
+    setElapsed(0);
+
+    if (!isAppending) {
+      setResponses(new Map());
+      setCompareIds(new Set());
+      setCurrentRunId(runId);
+      try { await fetch("/api/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: runId, content, prompt, models: modelsToRun.map((m) => m.id) }) }); } catch {}
+    }
+
+    // Add pending cards for new models (keep existing responses)
+    setResponses((prev) => {
+      const next = new Map(prev);
+      modelsToRun.forEach((m) => { next.set(m.id, { model: m.id, modelName: m.name, status: "pending" }); });
+      return next;
+    });
+
     const onUpdate = (modelId: string, response: ModelResponse) => {
       setResponses((prev) => { const next = new Map(prev); next.set(modelId, response); return next; });
     };
-    const results = await fanOut(models, content, prompt, apiKey, runId, 4096, onUpdate);
-    await runSynthesis(runId, results);
-  }, [content, prompt, selectedModels, apiKey, allModels, runSynthesis]);
+
+    abortRef.current = false;
+    setAborted(false);
+    const newResults = await fanOut(modelsToRun, content, prompt, apiKey, runId, 4096, () => abortRef.current, onUpdate);
+
+    // Combine with existing successful responses for synthesis
+    const allCompleted = [
+      ...[...responses.values()].filter((r) => r.status === "complete" && !modelsToRun.find((m) => m.id === r.model)),
+      ...newResults,
+    ];
+    await runSynthesis(runId, allCompleted);
+  }, [content, prompt, selectedModels, apiKey, allModels, runSynthesis, responses, currentRunId]);
+
+  const handleStop = useCallback(() => {
+    abortRef.current = true;
+    setAborted(true);
+    setStatus("complete");
+  }, []);
 
   const completedCount = [...responses.values()].filter((r) => r.status === "complete" || r.status === "error").length;
   const totalCount = responses.size;
   const successCount = [...responses.values()].filter((r) => r.status === "complete").length;
   const compareResponses = [...responses.values()].filter((r) => compareIds.has(r.model));
+
+  // How many selected models haven't been run yet
+  const alreadyCompleted = new Set([...responses.keys()].filter((id) => responses.get(id)?.status === "complete"));
+  const newModelsCount = [...selectedModels].filter((id) => !alreadyCompleted.has(id)).length;
+
+  // Timer
+  const [runStartTime, setRunStartTime] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (status === "running" || status === "synthesizing") {
+      if (!runStartTime) setRunStartTime(Date.now());
+      const interval = setInterval(() => {
+        setElapsed(Math.floor((Date.now() - (runStartTime || Date.now())) / 1000));
+      }, 1000);
+      return () => clearInterval(interval);
+    } else {
+      if (runStartTime) {
+        setElapsed(Math.floor((Date.now() - runStartTime) / 1000));
+        setRunStartTime(null);
+      }
+    }
+  }, [status, runStartTime]);
+
+  function formatElapsed(s: number): string {
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+  }
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -311,15 +384,29 @@ export default function Home() {
             </div>
 
             {/* Run Button */}
-            <button onClick={handleRun}
-              disabled={status === "running" || status === "synthesizing" || !content.trim() || selectedModels.size === 0}
-              className="w-full py-3.5 bg-green text-cream cta-text tracking-[0.15em] hover:bg-green-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-300 active:scale-[0.98]">
-              {status === "running"
-                ? `Analyzing... ${completedCount}/${totalCount}`
-                : status === "synthesizing"
-                  ? "Synthesizing..."
-                  : `Run Analysis \u00B7 ${selectedModels.size} Models`}
-            </button>
+            {status === "running" ? (
+              <div className="flex gap-2">
+                <div className="flex-1 py-3.5 bg-green/80 text-cream cta-text tracking-[0.15em] text-center">
+                  Analyzing... {completedCount}/{totalCount} &middot; {formatElapsed(elapsed)}
+                </div>
+                <button onClick={handleStop}
+                  className="px-6 py-3.5 bg-grey-60 text-cream cta-text tracking-[0.15em] hover:bg-ink transition-colors duration-300 active:scale-[0.98]">
+                  Stop
+                </button>
+              </div>
+            ) : (
+              <button onClick={handleRun}
+                disabled={status === "synthesizing" || !content.trim() || newModelsCount === 0}
+                className="w-full py-3.5 bg-green text-cream cta-text tracking-[0.15em] hover:bg-green-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-300 active:scale-[0.98]">
+                {status === "synthesizing"
+                  ? `Synthesizing... \u00B7 ${formatElapsed(elapsed)}`
+                  : alreadyCompleted.size > 0 && newModelsCount > 0
+                    ? `Add ${newModelsCount} More Models`
+                    : alreadyCompleted.size > 0 && newModelsCount === 0
+                      ? "All Selected Models Complete"
+                      : `Run Analysis \u00B7 ${selectedModels.size} Models`}
+              </button>
+            )}
 
             {modelsLoading && (
               <p className="text-[10px] text-grey-30 text-center tracking-wide">Loading models from OpenRouter...</p>

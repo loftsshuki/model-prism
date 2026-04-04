@@ -148,6 +148,7 @@ export async function invokeModel(
   apiKey: string,
   runId: string | null,
   maxTokens: number,
+  isAborted: () => boolean,
   onUpdate: (response: ModelResponse) => void
 ): Promise<ModelResponse> {
   const result: ModelResponse = {
@@ -155,6 +156,14 @@ export async function invokeModel(
     modelName: model.name,
     status: "streaming",
   };
+
+  // Skip if already aborted
+  if (isAborted()) {
+    result.status = "error";
+    result.error = "Stopped";
+    onUpdate(result);
+    return result;
+  }
 
   onUpdate(result);
 
@@ -216,6 +225,7 @@ export function fanOut(
   apiKey: string,
   runId: string | null,
   maxTokens: number,
+  isAborted: () => boolean,
   onUpdate: (modelId: string, response: ModelResponse) => void
 ): Promise<ModelResponse[]> {
   // Sort: paid first (fast), free last (slow/sequential)
@@ -228,7 +238,7 @@ export function fanOut(
   const promises = sorted.map((model) => {
     const limiter = model.tier === "free" ? freeLimit : paidLimit;
     return limiter(() =>
-      invokeModel(model, content, prompt, apiKey, runId, maxTokens, (resp) =>
+      invokeModel(model, content, prompt, apiKey, runId, maxTokens, isAborted, (resp) =>
         onUpdate(model.id, resp)
       )
     );
