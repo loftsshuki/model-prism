@@ -45,6 +45,118 @@ export const SynthesisSchema = z.object({
 
 export type SynthesisResult = z.infer<typeof SynthesisSchema>;
 
+// JSON Schema for Anthropic tool_use (mirrors SynthesisSchema above)
+export const SynthesisJsonSchema = {
+  type: "object" as const,
+  required: ["masterDocument", "consensus", "uniqueInsights", "disagreements", "blindSpots", "themeMatrix"],
+  properties: {
+    masterDocument: { type: "string", description: "The definitive, actionable synthesis document. Written as a single coherent piece that incorporates the best insights from ALL model responses. Use markdown formatting." },
+    consensus: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["point", "supportingModels", "strength"],
+        properties: {
+          point: { type: "string" },
+          supportingModels: { type: "array", items: { type: "string" } },
+          strength: { type: "string", enum: ["strong", "moderate", "weak"] },
+        },
+      },
+    },
+    uniqueInsights: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["model", "insight", "significance"],
+        properties: {
+          model: { type: "string" },
+          insight: { type: "string" },
+          significance: { type: "string", enum: ["high", "medium", "low"] },
+        },
+      },
+    },
+    disagreements: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["topic", "positions"],
+        properties: {
+          topic: { type: "string" },
+          positions: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["models", "position"],
+              properties: {
+                models: { type: "array", items: { type: "string" } },
+                position: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+    },
+    blindSpots: { type: "array", items: { type: "string" } },
+    themeMatrix: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["theme", "scores"],
+        properties: {
+          theme: { type: "string" },
+          scores: { type: "object", additionalProperties: { type: "number" } },
+        },
+      },
+    },
+  },
+};
+
+// Call Anthropic directly from the browser — no Vercel timeout
+export async function synthesizeDirect(
+  anthropicKey: string,
+  synthesisModel: "sonnet" | "opus",
+  content: string,
+  analysisPrompt: string,
+  responses: Array<{ model: string; modelName: string; family: string; response: string }>
+): Promise<SynthesisResult> {
+  const modelId = synthesisModel === "opus" ? "claude-opus-4-6" : "claude-sonnet-4-6";
+  const prompt = buildSynthesisPrompt(content, analysisPrompt, responses);
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": anthropicKey,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify({
+      model: modelId,
+      max_tokens: 16384,
+      tools: [{
+        name: "synthesis",
+        description: "Output the structured synthesis result",
+        input_schema: SynthesisJsonSchema,
+      }],
+      tool_choice: { type: "tool", name: "synthesis" },
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Anthropic error: ${res.status} ${err.slice(0, 200)}`);
+  }
+
+  const data = await res.json();
+  const toolBlock = data.content?.find((b: { type: string }) => b.type === "tool_use");
+  if (!toolBlock?.input) {
+    throw new Error("No structured output returned from synthesis model");
+  }
+
+  return toolBlock.input as SynthesisResult;
+}
+
 export function buildSynthesisPrompt(
   content: string,
   analysisPrompt: string,

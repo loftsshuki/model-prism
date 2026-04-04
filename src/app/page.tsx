@@ -5,6 +5,7 @@ import { ModelInfo, ModelResponse, RunState, SynthesisResult } from "@/lib/types
 import { FALLBACK_MODELS, estimateTokens, getModelsFilteredByContext, estimateCost } from "@/lib/model-registry";
 import { DEFAULT_TEMPLATES, PromptTemplate } from "@/lib/prompts";
 import { fanOut } from "@/lib/fan-out";
+import { synthesizeDirect } from "@/lib/synthesis";
 import { ModelPicker } from "@/components/model-picker";
 import { ResponseCard } from "@/components/response-card";
 import { SynthesisView } from "@/components/synthesis-view";
@@ -161,22 +162,21 @@ export default function Home() {
         return { model: r.model, modelName: r.modelName, family: model?.family ?? "unknown", response: r.response! };
       });
       try {
-        const res = await fetch("/api/synthesize", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ runId, content, analysisPrompt: prompt, responses: responsesForSynthesis, synthesisModel, anthropicKey }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setSynthesis(data.synthesis);
-        } else {
-          let errMsg = `Synthesis failed (HTTP ${res.status})`;
-          try { const err = await res.json(); errMsg = err.error || errMsg; } catch {}
-          setSynthesisError(errMsg);
+        // Call Anthropic directly from browser — no Vercel timeout
+        const result = await synthesizeDirect(anthropicKey, synthesisModel, content, prompt, responsesForSynthesis);
+        setSynthesis(result);
+        // Save to DB in background
+        if (runId) {
+          const modelId = synthesisModel === "opus" ? "claude-opus-4-6" : "claude-sonnet-4-6";
+          fetch("/api/synthesize/save", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ runId, result: JSON.stringify(result), modelUsed: modelId }),
+          }).catch(() => {});
         }
       } catch (error) {
         console.error("Synthesis failed:", error);
-        setSynthesisError(error instanceof Error ? error.message : "Network error during synthesis");
+        setSynthesisError(error instanceof Error ? error.message : "Synthesis failed");
       }
       setStatus("complete");
     },
