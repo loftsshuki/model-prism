@@ -2,43 +2,84 @@ import pLimit from "p-limit";
 import { ModelInfo, ModelResponse } from "./types";
 
 const paidLimit = pLimit(6);
-const freeLimit = pLimit(3);
+const freeLimit = pLimit(1); // Sequential — free models share brutal rate limits
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 // Call OpenRouter directly from the browser — bypasses Vercel timeout
-async function callDirect(
+async function callDirectWithRetry(
   model: string,
   content: string,
   prompt: string,
   apiKey: string,
-  maxTokens: number
+  maxTokens: number,
+  maxRetries: number = 5
 ): Promise<{ response: string; timeMs: number; inputTokens: number; outputTokens: number }> {
   const startTime = Date.now();
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "X-Title": "Model Prism",
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: maxTokens,
-      messages: [{ role: "user", content: `${prompt}\n\n---\n\n${content}` }],
-    }),
-  });
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`OpenRouter error: ${res.status} ${text.slice(0, 100)}`);
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "X-Title": "Model Prism",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          messages: [{ role: "user", content: `${prompt}\n\n---\n\n${content}` }],
+        }),
+      });
+
+      // 404 = model doesn't exist or no providers available — don't retry
+      if (res.status === 404) {
+        const text = await res.text();
+        throw new Error(`Model unavailable (404)`);
+      }
+
+      // 429 = rate limited — wait longer and retry
+      if (res.status === 429 && attempt < maxRetries) {
+        const delay = Math.min(5000 * Math.pow(2, attempt), 30000) + Math.random() * 3000;
+        await sleep(delay);
+        continue;
+      }
+
+      // 502/503 = provider overloaded — retry with backoff
+      if ((res.status === 502 || res.status === 503) && attempt < maxRetries) {
+        await sleep(3000 * (attempt + 1) + Math.random() * 2000);
+        continue;
+      }
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`OpenRouter error: ${res.status} ${text.slice(0, 120)}`);
+      }
+
+      const data = await res.json();
+      return {
+        response: data.choices?.[0]?.message?.content ?? "",
+        timeMs: Date.now() - startTime,
+        inputTokens: data.usage?.prompt_tokens ?? 0,
+        outputTokens: data.usage?.completion_tokens ?? 0,
+      };
+    } catch (error) {
+      // Don't retry non-retryable errors
+      if (error instanceof Error && (error.message.includes("404") || error.message.includes("unavailable"))) {
+        throw error;
+      }
+      if (attempt < maxRetries) {
+        await sleep(3000 * (attempt + 1));
+        continue;
+      }
+      throw error;
+    }
   }
 
-  const data = await res.json();
-  return {
-    response: data.choices?.[0]?.message?.content ?? "",
-    timeMs: Date.now() - startTime,
-    inputTokens: data.usage?.prompt_tokens ?? 0,
-    outputTokens: data.usage?.completion_tokens ?? 0,
-  };
+  throw new Error("Max retries exceeded");
 }
 
 async function persistResponse(runId: string, model: ModelInfo, result: ModelResponse) {
@@ -82,10 +123,9 @@ async function callWithRetry(
         body: JSON.stringify({ model: model.id, content, prompt, apiKey, maxTokens }),
       });
 
-      // Retry on 429 (rate limit) — exponential backoff
       if (res.status === 429 && attempt < maxRetries) {
         const delay = (attempt + 1) * 2000 + Math.random() * 1000;
-        await new Promise((r) => setTimeout(r, delay));
+        await sleep(delay);
         continue;
       }
 
@@ -93,7 +133,7 @@ async function callWithRetry(
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       if (attempt < maxRetries) {
-        await new Promise((r) => setTimeout(r, (attempt + 1) * 1500));
+        await sleep((attempt + 1) * 1500);
         continue;
       }
     }
@@ -123,8 +163,7 @@ export async function invokeModel(
 
   try {
     if (isFree) {
-      // Free models: call OpenRouter directly from browser — no Vercel timeout
-      const data = await callDirect(model.id, content, prompt, apiKey, maxTokens);
+      const data = await callDirectWithRetry(model.id, content, prompt, apiKey, maxTokens);
       result.status = "complete";
       result.response = data.response;
       result.timeMs = data.timeMs;
@@ -136,7 +175,7 @@ export async function invokeModel(
       return result;
     }
 
-    // Paid models: proxy through server to hide API key
+    // Paid models: proxy through server
     const res = await callWithRetry(model, content, prompt, apiKey, maxTokens);
 
     if (!res.ok) {
@@ -180,7 +219,14 @@ export function fanOut(
   maxTokens: number,
   onUpdate: (modelId: string, response: ModelResponse) => void
 ): Promise<ModelResponse[]> {
-  const promises = models.map((model) => {
+  // Sort: paid first (fast), free last (slow/sequential)
+  const sorted = [...models].sort((a, b) => {
+    if (a.tier === "free" && b.tier !== "free") return 1;
+    if (a.tier !== "free" && b.tier === "free") return -1;
+    return 0;
+  });
+
+  const promises = sorted.map((model) => {
     const limiter = model.tier === "free" ? freeLimit : paidLimit;
     return limiter(() =>
       invokeModel(model, content, prompt, apiKey, runId, maxTokens, (resp) =>
