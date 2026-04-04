@@ -86,9 +86,6 @@ function isTextModel(m: OpenRouterModel): boolean {
   // Exclude uncensored/NSFW-focused models
   if (id.includes("uncensored") || name.includes("uncensored")) return false;
 
-  // Exclude models with no instruct tuning (raw base models)
-  if (m.architecture?.instruct_type === null && !id.includes("o1") && !id.includes("o3") && !id.includes("o4")) return false;
-
   return true;
 }
 
