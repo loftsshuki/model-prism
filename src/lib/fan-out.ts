@@ -8,14 +8,14 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Call OpenRouter directly from the browser — bypasses Vercel timeout
-async function callDirectWithRetry(
+// Call OpenRouter directly from the browser — no Vercel timeout ceiling
+async function callDirect(
   model: string,
   content: string,
   prompt: string,
   apiKey: string,
   maxTokens: number,
-  maxRetries: number = 5
+  maxRetries: number
 ): Promise<{ response: string; timeMs: number; inputTokens: number; outputTokens: number }> {
   const startTime = Date.now();
 
@@ -27,6 +27,7 @@ async function callDirectWithRetry(
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
           "X-Title": "Model Prism",
+          "HTTP-Referer": "https://model-prism.vercel.app",
         },
         body: JSON.stringify({
           model,
@@ -47,8 +48,8 @@ async function callDirectWithRetry(
         continue;
       }
 
-      // 502/503 = provider overloaded — retry with backoff
-      if ((res.status === 502 || res.status === 503) && attempt < maxRetries) {
+      // 502/503/504 = provider overloaded or slow — retry with backoff
+      if ((res.status === 502 || res.status === 503 || res.status === 504) && attempt < maxRetries) {
         await sleep(3000 * (attempt + 1) + Math.random() * 2000);
         continue;
       }
@@ -104,42 +105,8 @@ async function persistResponse(runId: string, model: ModelInfo, result: ModelRes
   }
 }
 
-async function callWithRetry(
-  model: ModelInfo,
-  content: string,
-  prompt: string,
-  apiKey: string,
-  maxTokens: number = 4096,
-  maxRetries: number = 3
-): Promise<Response> {
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const res = await fetch("/api/invoke-model", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: model.id, content, prompt, apiKey, maxTokens }),
-      });
-
-      // Retry on rate limit, gateway timeout, or provider errors
-      if ((res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504) && attempt < maxRetries) {
-        const delay = (attempt + 1) * 2000 + Math.random() * 2000;
-        await sleep(delay);
-        continue;
-      }
-
-      return res;
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      if (attempt < maxRetries) {
-        await sleep((attempt + 1) * 1500);
-        continue;
-      }
-    }
-  }
-
-  throw lastError ?? new Error("Request failed after retries");
+function estimateResponseCost(model: ModelInfo, inputTokens: number, outputTokens: number): number {
+  return (inputTokens / 1000) * model.inputCostPer1k + (outputTokens / 1000) * model.outputCostPer1k;
 }
 
 export async function invokeModel(
@@ -169,44 +136,17 @@ export async function invokeModel(
   onUpdate(result);
 
   const isFree = model.tier === "free";
+  // Free models: 5 retries (brutal rate limits). Paid: 3 retries.
+  const maxRetries = isFree ? 5 : 3;
 
   try {
-    if (isFree) {
-      const data = await callDirectWithRetry(model.id, content, prompt, apiKey, maxTokens);
-      result.status = "complete";
-      result.response = data.response;
-      result.timeMs = data.timeMs;
-      result.inputTokens = data.inputTokens;
-      result.outputTokens = data.outputTokens;
-      result.cost = 0;
-      onUpdate(result);
-      if (runId) persistResponse(runId, model, result);
-      return result;
-    }
-
-    // Paid models: proxy through server
-    const res = await callWithRetry(model, content, prompt, apiKey, maxTokens);
-
-    if (!res.ok) {
-      let errMsg = `HTTP ${res.status}`;
-      try {
-        const err = await res.json();
-        errMsg = err.error || errMsg;
-      } catch {}
-      result.status = "error";
-      result.error = errMsg;
-      onUpdate(result);
-      if (runId) persistResponse(runId, model, result);
-      return result;
-    }
-
-    const data = await res.json();
+    const data = await callDirect(model.id, content, prompt, apiKey, maxTokens, maxRetries);
     result.status = "complete";
     result.response = data.response;
     result.timeMs = data.timeMs;
     result.inputTokens = data.inputTokens;
     result.outputTokens = data.outputTokens;
-    result.cost = data.cost;
+    result.cost = isFree ? 0 : estimateResponseCost(model, data.inputTokens, data.outputTokens);
     onUpdate(result);
     if (runId) persistResponse(runId, model, result);
     return result;
