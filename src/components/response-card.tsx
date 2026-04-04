@@ -19,85 +19,66 @@ export function ResponseCard({
 }: ResponseCardProps) {
   const [expanded, setExpanded] = useState(false);
 
-  const statusColor = {
-    pending: "border-neutral-800 bg-neutral-900/50",
-    streaming: "border-amber-500/30 bg-amber-500/5",
-    complete: isComparing
-      ? "border-violet-500/50 bg-violet-500/10"
-      : "border-emerald-500/30 bg-emerald-500/5",
-    error: "border-red-500/30 bg-red-500/5",
+  const borderColor = {
+    pending: "border-grey-10",
+    streaming: "border-gold/40",
+    complete: isComparing ? "border-green" : "border-border",
+    error: "border-red-300",
   }[response.status];
 
-  const statusDot = {
-    pending: "bg-neutral-600",
-    streaming: "bg-amber-400 animate-pulse",
-    complete: "bg-emerald-400",
+  const bgColor = {
+    pending: "bg-grey-5",
+    streaming: "bg-cream",
+    complete: isComparing ? "bg-green-light" : "bg-white",
+    error: "bg-red-50",
+  }[response.status];
+
+  const dotColor = {
+    pending: "bg-grey-20",
+    streaming: "bg-gold animate-pulse",
+    complete: "bg-green",
     error: "bg-red-400",
   }[response.status];
 
   return (
-    <div
-      className={cn("rounded-lg border p-3 transition-all", statusColor)}
-    >
+    <div className={cn("border p-4 transition-all duration-300", borderColor, bgColor)}>
       <div className="flex items-center justify-between">
-        <div
-          className="flex items-center gap-2 flex-1 cursor-pointer"
-          onClick={() => response.status === "complete" && setExpanded(!expanded)}
-        >
-          <div className={cn("w-1.5 h-1.5 rounded-full shrink-0", statusDot)} />
-          <span className="text-sm font-medium text-neutral-200">
-            {response.modelName}
-          </span>
+        <div className="flex items-center gap-3 flex-1 cursor-pointer"
+          onClick={() => response.status === "complete" && setExpanded(!expanded)}>
+          <div className={cn("w-1.5 h-1.5 rounded-full shrink-0", dotColor)} />
+          <span className="text-sm font-medium text-ink">{response.modelName}</span>
         </div>
-        <div className="flex items-center gap-3 text-xs text-neutral-500">
+        <div className="flex items-center gap-4 text-[10px] tracking-wide text-grey-40">
           {response.timeMs != null && <span>{(response.timeMs / 1000).toFixed(1)}s</span>}
           {response.outputTokens != null && <span>{response.outputTokens} tok</span>}
           {compareMode && response.status === "complete" && onToggleCompare && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggleCompare();
-              }}
+            <button onClick={(e) => { e.stopPropagation(); onToggleCompare(); }}
               className={cn(
-                "px-2 py-0.5 rounded text-[10px] transition-colors",
-                isComparing
-                  ? "bg-violet-600 text-white"
-                  : "bg-neutral-800 text-neutral-400 hover:bg-neutral-700"
-              )}
-            >
-              {isComparing ? "Comparing" : "Compare"}
+                "cta-text px-3 py-1 border transition-colors duration-300",
+                isComparing ? "border-green bg-green text-cream" : "border-border text-grey-40 hover:border-green hover:text-green"
+              )}>
+              {isComparing ? "Selected" : "Compare"}
             </button>
           )}
         </div>
       </div>
 
       {response.status === "error" && (
-        <p className="mt-2 text-xs text-red-400">{response.error}</p>
+        <p className="mt-3 text-xs text-red-500">{response.error}</p>
       )}
 
       {response.status === "complete" && response.response && (
-        <div
-          className="mt-2 cursor-pointer"
-          onClick={() => setExpanded(!expanded)}
-        >
+        <div className="mt-3 cursor-pointer" onClick={() => setExpanded(!expanded)}>
           {expanded ? (
-            <p className="text-sm text-neutral-300 whitespace-pre-wrap leading-relaxed">
-              {response.response}
-            </p>
+            <p className="text-sm text-grey-60 whitespace-pre-wrap leading-relaxed">{response.response}</p>
           ) : (
-            <p className="text-sm text-neutral-400 line-clamp-2">
-              {response.response}
-            </p>
+            <p className="text-sm text-grey-40 line-clamp-2 leading-relaxed">{response.response}</p>
           )}
         </div>
       )}
 
-      {response.status === "pending" && (
-        <p className="mt-2 text-xs text-neutral-600">Waiting...</p>
-      )}
-      {response.status === "streaming" && (
-        <p className="mt-2 text-xs text-amber-400/70">Running...</p>
-      )}
+      {response.status === "pending" && <p className="mt-2 text-[10px] text-grey-20 tracking-wide">Waiting...</p>}
+      {response.status === "streaming" && <p className="mt-2 text-[10px] text-gold tracking-wide">Analyzing...</p>}
     </div>
   );
 }

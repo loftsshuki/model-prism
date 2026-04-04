@@ -9,20 +9,20 @@ interface SynthesisViewProps {
 
 export function SynthesisView({ synthesis }: SynthesisViewProps) {
   return (
-    <div className="space-y-6 rounded-xl border border-violet-500/20 bg-violet-500/5 p-5">
-      <h2 className="text-lg font-semibold text-violet-200">Synthesis</h2>
+    <div className="border border-green/20 bg-white p-6 lg:p-8 space-y-8">
+      <div className="flex items-center gap-3">
+        <div className="w-8 h-px bg-green" />
+        <h2 className="font-display text-2xl font-bold text-ink">Synthesis</h2>
+      </div>
 
       {synthesis.consensus.length > 0 && (
         <div>
-          <h3 className="text-sm font-semibold text-emerald-300 mb-2">
-            Consensus
-          </h3>
-          <ul className="space-y-2">
+          <span className="overline text-green">Consensus</span>
+          <ul className="mt-3 space-y-3">
             {synthesis.consensus.map((c, i) => (
-              <li key={i} className="text-sm text-neutral-300">
-                <span className="text-emerald-400 mr-1.5">+</span>
+              <li key={i} className="text-sm text-grey-60 leading-relaxed pl-4 border-l-2 border-green/30">
                 {c.point}
-                <span className="text-xs text-neutral-500 ml-2">
+                <span className="text-[10px] text-grey-30 ml-2 tracking-wide">
                   ({c.supportingModels.length} models, {c.strength})
                 </span>
               </li>
@@ -33,15 +33,12 @@ export function SynthesisView({ synthesis }: SynthesisViewProps) {
 
       {synthesis.uniqueInsights.length > 0 && (
         <div>
-          <h3 className="text-sm font-semibold text-amber-300 mb-2">
-            Unique Insights
-          </h3>
-          <ul className="space-y-2">
+          <span className="overline text-gold">Unique Insights</span>
+          <ul className="mt-3 space-y-3">
             {synthesis.uniqueInsights.map((u, i) => (
-              <li key={i} className="text-sm text-neutral-300">
-                <span className="text-amber-400 mr-1.5">*</span>
+              <li key={i} className="text-sm text-grey-60 leading-relaxed pl-4 border-l-2 border-gold/30">
                 {u.insight}
-                <span className="text-xs text-neutral-500 ml-2">
+                <span className="text-[10px] text-grey-30 ml-2 tracking-wide">
                   (only {u.model})
                 </span>
               </li>
@@ -52,18 +49,14 @@ export function SynthesisView({ synthesis }: SynthesisViewProps) {
 
       {synthesis.disagreements.length > 0 && (
         <div>
-          <h3 className="text-sm font-semibold text-red-300 mb-2">
-            Disagreements
-          </h3>
+          <span className="overline text-grey-60">Disagreements</span>
           {synthesis.disagreements.map((d, i) => (
-            <div key={i} className="mb-3">
-              <p className="text-sm font-medium text-neutral-200">{d.topic}</p>
-              <ul className="mt-1 space-y-1 pl-3">
+            <div key={i} className="mt-3 mb-4">
+              <p className="text-sm font-medium text-ink">{d.topic}</p>
+              <ul className="mt-2 space-y-1.5 pl-4">
                 {d.positions.map((p, j) => (
-                  <li key={j} className="text-xs text-neutral-400">
-                    <span className="text-neutral-500">
-                      [{p.models.join(", ")}]
-                    </span>{" "}
+                  <li key={j} className="text-xs text-grey-50 leading-relaxed">
+                    <span className="text-grey-30">[{p.models.join(", ")}]</span>{" "}
                     {p.position}
                   </li>
                 ))}
@@ -75,13 +68,10 @@ export function SynthesisView({ synthesis }: SynthesisViewProps) {
 
       {synthesis.blindSpots.length > 0 && (
         <div>
-          <h3 className="text-sm font-semibold text-neutral-400 mb-2">
-            Blind Spots
-          </h3>
-          <ul className="space-y-1">
+          <span className="overline text-grey-40">Blind Spots</span>
+          <ul className="mt-3 space-y-2">
             {synthesis.blindSpots.map((b, i) => (
-              <li key={i} className="text-sm text-neutral-500">
-                <span className="mr-1.5">?</span>
+              <li key={i} className="text-sm text-grey-40 leading-relaxed pl-4 border-l-2 border-grey-10">
                 {b}
               </li>
             ))}
