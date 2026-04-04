@@ -1,7 +1,7 @@
 import pLimit from "p-limit";
 import { ModelInfo, ModelResponse } from "./types";
 
-const limit = pLimit(8);
+const limit = pLimit(6);
 
 async function persistResponse(runId: string, model: ModelInfo, result: ModelResponse) {
   try {
@@ -22,8 +22,45 @@ async function persistResponse(runId: string, model: ModelInfo, result: ModelRes
       }),
     });
   } catch {
-    // Non-blocking — don't fail the fan-out if persistence fails
+    // Non-blocking
   }
+}
+
+async function callWithRetry(
+  model: ModelInfo,
+  content: string,
+  prompt: string,
+  apiKey: string,
+  maxRetries: number = 2
+): Promise<Response> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch("/api/invoke-model", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: model.id, content, prompt, apiKey }),
+      });
+
+      // Retry on 429 (rate limit) — exponential backoff
+      if (res.status === 429 && attempt < maxRetries) {
+        const delay = (attempt + 1) * 2000 + Math.random() * 1000;
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+
+      return res;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, (attempt + 1) * 1500));
+        continue;
+      }
+    }
+  }
+
+  throw lastError ?? new Error("Request failed after retries");
 }
 
 export async function invokeModel(
@@ -43,22 +80,16 @@ export async function invokeModel(
   onUpdate(result);
 
   try {
-    const res = await fetch("/api/invoke-model", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: model.id,
-        content,
-        prompt,
-        apiKey,
-      }),
-    });
+    const res = await callWithRetry(model, content, prompt, apiKey);
 
     if (!res.ok) {
-      const err = await res.json();
+      let errMsg = `HTTP ${res.status}`;
+      try {
+        const err = await res.json();
+        errMsg = err.error || errMsg;
+      } catch {}
       result.status = "error";
-      result.error = err.error || `HTTP ${res.status}`;
-      result.timeMs = err.timeMs;
+      result.error = errMsg;
       onUpdate(result);
       if (runId) persistResponse(runId, model, result);
       return result;
