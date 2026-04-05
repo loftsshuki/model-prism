@@ -42,8 +42,8 @@ export default function Home() {
     return "";
   });
   const [synthesisModel, setSynthesisModel] = useState<"sonnet" | "opus">(() => {
-    if (typeof window !== "undefined") return (localStorage.getItem("synthesis-model") as "sonnet" | "opus") || "sonnet";
-    return "sonnet";
+    if (typeof window !== "undefined") return (localStorage.getItem("synthesis-model") as "sonnet" | "opus") || "opus";
+    return "opus";
   });
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [responses, setResponses] = useState<Map<string, ModelResponse>>(new Map());
