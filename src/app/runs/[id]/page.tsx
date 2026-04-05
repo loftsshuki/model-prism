@@ -119,6 +119,15 @@ function downloadMarkdown(content: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+function formatDate(raw: string) {
+  try {
+    const d = new Date(raw.includes("T") ? raw : raw + "Z");
+    if (isNaN(d.getTime())) return "";
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) +
+      " at " + d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  } catch { return ""; }
+}
+
 export default function RunPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -144,7 +153,6 @@ export default function RunPage() {
 
   const handleRerun = () => {
     if (!run) return;
-    // Store rerun data in sessionStorage so the home page can pick it up
     sessionStorage.setItem(
       "rerun",
       JSON.stringify({
@@ -164,7 +172,7 @@ export default function RunPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-neutral-950 flex items-center justify-center text-neutral-600">
+      <div className="min-h-screen bg-cream flex items-center justify-center text-grey-40">
         Loading...
       </div>
     );
@@ -172,55 +180,67 @@ export default function RunPage() {
 
   if (error || !run) {
     return (
-      <div className="min-h-screen bg-neutral-950 flex items-center justify-center text-neutral-600">
+      <div className="min-h-screen bg-cream flex items-center justify-center text-grey-40">
         {error || "Run not found"}
       </div>
     );
   }
 
+  const successCount = run.responses.filter((r) => r.response && !r.error).length;
+
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100">
-      <header className="border-b border-neutral-800 px-6 py-4">
-        <div className="max-w-5xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <a href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
-                <span className="text-sm font-bold">P</span>
+    <div className="min-h-screen bg-cream text-ink">
+      <header className="bg-green text-cream">
+        <div className="max-w-5xl mx-auto px-6 py-5 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <a href="/" className="flex items-center gap-4 hover:opacity-80 transition-opacity">
+              <div className="w-9 h-9 border border-cream/30 flex items-center justify-center">
+                <span className="font-display text-lg font-bold tracking-tight">P</span>
               </div>
-              <h1 className="text-lg font-semibold">Model Prism</h1>
+              <div>
+                <h1 className="font-display text-xl font-bold tracking-tight leading-none">Model Prism</h1>
+                <p className="text-[10px] tracking-[0.2em] uppercase text-cream/50 mt-0.5">One Input, Many Angles</p>
+              </div>
             </a>
-            <span className="text-neutral-600">/</span>
-            <span className="text-sm text-neutral-400">Run</span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-4">
             <button
               onClick={handleExport}
-              className="text-xs px-3 py-1.5 rounded-lg bg-neutral-800 text-neutral-300 hover:bg-neutral-700 transition-colors"
+              className="cta-text px-4 py-2 border border-cream/30 text-cream/70 hover:text-cream hover:border-cream/60 transition-colors duration-300"
             >
               Export .md
             </button>
             <button
               onClick={handleRerun}
-              className="text-xs px-3 py-1.5 rounded-lg bg-violet-600 text-white hover:bg-violet-500 transition-colors"
+              className="cta-text px-4 py-2 bg-cream text-green hover:bg-white transition-colors duration-300"
             >
-              Re-run with different models
+              Re-run
             </button>
-            <a href="/history" className="text-xs text-neutral-500 hover:text-neutral-300">
+            <a href="/history" className="cta-text text-cream/60 hover:text-cream transition-colors duration-300">
               History
             </a>
           </div>
         </div>
       </header>
 
-      <div className="max-w-5xl mx-auto p-6 space-y-6">
+      <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
         {/* Run Info */}
-        <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
-          <p className="text-sm text-neutral-200 mb-2">{run.prompt}</p>
-          <p className="text-xs text-neutral-500 line-clamp-3">{run.content}</p>
-          <div className="flex gap-4 mt-3 text-xs text-neutral-600">
-            <span>{run.responses.length} models</span>
-            <span>{new Date(run.created_at + "Z").toLocaleString()}</span>
-            {run.synthesisModel && <span>Synthesized with {run.synthesisModel}</span>}
+        <div className="border border-border bg-white p-5">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-8 h-px bg-green" />
+            <span className="overline text-green">Run Details</span>
+          </div>
+          <p className="text-sm text-ink font-medium mb-2">{run.prompt}</p>
+          <p className="text-xs text-grey-40 line-clamp-3 leading-relaxed">{run.content}</p>
+          <div className="flex gap-4 mt-4 pt-3 border-t border-border">
+            <span className="text-[10px] tracking-wide uppercase text-grey-40">{successCount} of {run.responses.length} models</span>
+            <span className="text-[10px] tracking-wide text-grey-30">{formatDate(run.created_at)}</span>
+            {run.total_cost > 0 && (
+              <span className="text-[10px] tracking-wide text-grey-30">${run.total_cost.toFixed(4)}</span>
+            )}
+            {run.synthesisModel && (
+              <span className="text-[10px] tracking-wide uppercase text-gold">Synthesized with {run.synthesisModel}</span>
+            )}
           </div>
         </div>
 
@@ -229,9 +249,10 @@ export default function RunPage() {
 
         {/* Responses */}
         <div className="space-y-2">
-          <h3 className="text-sm font-medium text-neutral-400">
-            Individual Responses
-          </h3>
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-8 h-px bg-grey-20" />
+            <span className="overline text-grey-40">Individual Responses</span>
+          </div>
           {run.responses.map((r) => (
             <ResponseCard
               key={r.model}
