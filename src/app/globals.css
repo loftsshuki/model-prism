@@ -110,6 +110,6 @@ body {
 
 /* Selection */
 ::selection {
-  background: var(--green-light);
-  color: var(--green);
+  background: var(--green);
+  color: var(--cream);
 }
