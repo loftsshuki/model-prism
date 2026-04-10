@@ -14,6 +14,7 @@
     "ai": "^6.0.145",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "idb-keyval": "^6.2.2",
     "lucide-react": "^1.7.0",
     "next": "16.2.2",
     "p-limit": "^7.3.0",

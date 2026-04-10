@@ -23,9 +23,12 @@ export const TIERS: Array<{ key: ModelInfo["tier"]; label: string; color: string
   { key: "free", label: "Free", color: "green" },
 ];
 
-export function estimateTokens(text: string): number {
-  // Rough estimate: ~4 chars per token for English
-  return Math.ceil(text.length / 4);
+export const TOKEN_BUDGET_WARNING = 50000;
+
+export function estimateTokens(text: string, type: "prose" | "code" = "prose"): number {
+  // Prose: ~4 chars/token. Code: ~2.5 chars/token (shorter identifiers, more brackets)
+  const charsPerToken = type === "code" ? 2.5 : 4;
+  return Math.ceil(text.length / charsPerToken);
 }
 
 export function getModelsFilteredByContext(models: ModelInfo[], inputTokens: number): {

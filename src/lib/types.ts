@@ -1,3 +1,62 @@
+// --- Context Pack types ---
+
+export interface GitHubRepo {
+  full_name: string;       // "loftsshuki/LuxuryApartments"
+  default_branch: string;
+  private: boolean;
+}
+
+export interface RepoFile {
+  path: string;            // "src/app/page.tsx"
+  size: number;            // bytes
+  type: "file" | "dir";
+}
+
+export interface FetchTreeResult {
+  files: RepoFile[];
+  truncated: boolean;
+}
+
+export type FileFetchResult =
+  | { ok: true; content: string; size: number }
+  | { ok: false; reason: "too_large" | "binary" | "decode_failed" | "not_found" | "blocked" };
+
+export interface PatValidationResult {
+  valid: boolean;
+  username?: string;
+  scopes?: string[];       // from X-OAuth-Scopes header
+  errorType?: "bad_token" | "insufficient_scope" | "sso_required" | "rate_limited";
+  message?: string;
+}
+
+export interface ContextPack {
+  version: 1;
+  id: string;              // "pack_${timestamp}"
+  name: string;            // "LuxApts Core"
+  repo: string;            // "loftsshuki/LuxuryApartments"
+  branch: string;          // "main"
+  brief: string;           // The repo brief text (user-editable)
+  briefEnhanced: boolean;  // true if AI-enhanced
+  selectedFiles: string[]; // Paths of files to attach (contents fetched on demand)
+  createdAt: string;       // ISO timestamp
+  updatedAt: string;       // ISO timestamp
+}
+
+export interface GitHubApiError {
+  status: number;
+  message: string;
+  retryable: boolean;
+  resetAt?: number;        // Unix timestamp for rate limit reset
+}
+
+export interface RateLimitInfo {
+  remaining: number;
+  limit: number;
+  resetAt: number;         // Unix timestamp
+}
+
+// --- Model types ---
+
 export interface ModelInfo {
   id: string;
   name: string;

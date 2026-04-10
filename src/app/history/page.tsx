@@ -7,6 +7,7 @@ interface RunSummary {
   content: string;
   prompt: string;
   total_cost: number;
+  context_metadata: string | null;
   created_at: string;
   response_count: number;
   has_synthesis: number;
@@ -97,6 +98,17 @@ export default function HistoryPage() {
                   </div>
                   <div className="flex items-center gap-4 ml-4 shrink-0">
                     <span className="text-[10px] tracking-wide uppercase text-grey-40">{run.response_count} models</span>
+                    {run.context_metadata && (() => {
+                      try {
+                        const ctx = JSON.parse(run.context_metadata);
+                        return (
+                          <span className="text-[10px] tracking-wide uppercase text-green">
+                            {ctx.packName}
+                            {ctx.files?.length > 0 && ` + ${ctx.files.length} files`}
+                          </span>
+                        );
+                      } catch { return null; }
+                    })()}
                     {run.has_synthesis > 0 && (
                       <span className="text-[10px] tracking-wide uppercase text-gold">synthesized</span>
                     )}

@@ -21,8 +21,17 @@ export async function initDb() {
       prompt TEXT NOT NULL,
       models TEXT NOT NULL,
       total_cost REAL DEFAULT 0,
+      context_metadata TEXT,
       created_at TIMESTAMP DEFAULT NOW()
     )
+  `;
+
+  // Migration: add context_metadata column if it doesn't exist
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE runs ADD COLUMN IF NOT EXISTS context_metadata TEXT;
+    EXCEPTION WHEN others THEN NULL;
+    END $$;
   `;
 
   await sql`
@@ -61,13 +70,14 @@ export async function createRun(
   id: string,
   content: string,
   prompt: string,
-  models: string[]
+  models: string[],
+  contextMetadata?: string | null
 ) {
   await initDb();
   const sql = getClient();
   await sql`
-    INSERT INTO runs (id, content, prompt, models)
-    VALUES (${id}, ${content}, ${prompt}, ${JSON.stringify(models)})
+    INSERT INTO runs (id, content, prompt, models, context_metadata)
+    VALUES (${id}, ${content}, ${prompt}, ${JSON.stringify(models)}, ${contextMetadata ?? null})
   `;
 }
 
@@ -140,12 +150,12 @@ export async function listRuns() {
   const sql = getClient();
 
   const runs = await sql`
-    SELECT r.id, r.content, r.prompt, r.total_cost, r.created_at,
+    SELECT r.id, r.content, r.prompt, r.total_cost, r.context_metadata, r.created_at,
       COUNT(resp.id)::int as response_count,
       (SELECT COUNT(*)::int FROM syntheses s WHERE s.run_id = r.id) as has_synthesis
     FROM runs r
     LEFT JOIN responses resp ON resp.run_id = r.id
-    GROUP BY r.id, r.content, r.prompt, r.total_cost, r.created_at
+    GROUP BY r.id, r.content, r.prompt, r.total_cost, r.context_metadata, r.created_at
     ORDER BY r.created_at DESC
     LIMIT 50
   `;

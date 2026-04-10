@@ -1,15 +1,18 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { ModelInfo, ModelResponse, RunState, SynthesisResult } from "@/lib/types";
+import { ModelInfo, ModelResponse, RunState, SynthesisResult, ContextPack } from "@/lib/types";
 import { FALLBACK_MODELS, estimateTokens, getModelsFilteredByContext, estimateCost } from "@/lib/model-registry";
 import { DEFAULT_TEMPLATES, PromptTemplate } from "@/lib/prompts";
 import { fanOut } from "@/lib/fan-out";
 import { synthesizeDirect } from "@/lib/synthesis";
+import { getContextPacks, getActivePackId, buildContextString } from "@/lib/context-packs";
+import { getCachedFileContent } from "@/lib/context-cache";
 import { ModelPicker } from "@/components/model-picker";
 import { ResponseCard } from "@/components/response-card";
 import { SynthesisView } from "@/components/synthesis-view";
 import { CompareView } from "@/components/compare-view";
+import { ContextPanel } from "@/components/context-panel";
 
 function generateId() {
   return `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -55,7 +58,39 @@ export default function Home() {
   const [copied, setCopied] = useState(false);
   const [customTemplates, setCustomTemplates] = useState<PromptTemplate[]>([]);
 
+  // --- Context Pack state ---
+  const [githubPat, setGithubPat] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("github-pat") || "";
+    return "";
+  });
+  const [activePack, setActivePack] = useState<ContextPack | null>(null);
+  const [contextEnabled, setContextEnabled] = useState(false);
+  const [contextFileContents, setContextFileContents] = useState<Record<string, string>>({});
+  const [contextTokens, setContextTokens] = useState(0);
+
   const allTemplates = useMemo(() => [...DEFAULT_TEMPLATES, ...customTemplates], [customTemplates]);
+
+  // Load active context pack on mount
+  useEffect(() => {
+    const activeId = getActivePackId();
+    if (activeId) {
+      const packs = getContextPacks();
+      const pack = packs.find((p) => p.id === activeId);
+      if (pack) {
+        setActivePack(pack);
+        setContextEnabled(true);
+        // Load cached file contents
+        (async () => {
+          const contents: Record<string, string> = {};
+          for (const path of pack.selectedFiles) {
+            const cached = await getCachedFileContent(pack.repo, pack.branch, path);
+            if (cached) contents[path] = cached.content;
+          }
+          setContextFileContents(contents);
+        })();
+      }
+    }
+  }, []);
 
   useEffect(() => {
     setCustomTemplates(getCustomTemplates());
@@ -87,7 +122,18 @@ export default function Home() {
       .catch(() => setModelsLoading(false));
   }, []);
 
-  const inputTokens = estimateTokens(content + prompt);
+  // Re-read GitHub PAT from localStorage (settings page might update it)
+  useEffect(() => {
+    const handleStorage = () => {
+      setGithubPat(localStorage.getItem("github-pat") || "");
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
+
+  // Token estimation includes context
+  const baseInputTokens = estimateTokens(content + prompt);
+  const inputTokens = baseInputTokens + contextTokens;
   const { tooSmall } = getModelsFilteredByContext(allModels, inputTokens);
   const selectedModelInfos = allModels.filter((m) => selectedModels.has(m.id));
   const costEstimate = estimateCost(selectedModelInfos, inputTokens);
@@ -150,6 +196,13 @@ export default function Home() {
     });
   };
 
+  // Build context string for current run
+  const getContextString = useCallback((): string | undefined => {
+    if (!activePack || !contextEnabled) return undefined;
+    const cs = buildContextString(activePack, contextFileContents);
+    return cs || undefined;
+  }, [activePack, contextEnabled, contextFileContents]);
+
   const runSynthesis = useCallback(
     async (runId: string, completedResponses: ModelResponse[]) => {
       if (!anthropicKey) { setStatus("complete"); return; }
@@ -162,8 +215,8 @@ export default function Home() {
         return { model: r.model, modelName: r.modelName, family: model?.family ?? "unknown", response: r.response! };
       });
       try {
-        // Call Anthropic directly from browser — no Vercel timeout
-        const result = await synthesizeDirect(anthropicKey, synthesisModel, content, prompt, responsesForSynthesis);
+        const contextString = getContextString();
+        const result = await synthesizeDirect(anthropicKey, synthesisModel, content, prompt, responsesForSynthesis, contextString);
         setSynthesis(result);
         // Save to DB in background
         if (runId) {
@@ -180,7 +233,7 @@ export default function Home() {
       }
       setStatus("complete");
     },
-    [anthropicKey, content, prompt, synthesisModel, allModels]
+    [anthropicKey, content, prompt, synthesisModel, allModels, getContextString]
   );
 
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
@@ -213,7 +266,30 @@ export default function Home() {
       setResponses(new Map());
       setCompareIds(new Set());
       setCurrentRunId(runId);
-      try { await fetch("/api/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: runId, content, prompt, models: modelsToRun.map((m) => m.id) }) }); } catch {}
+
+      // Build context metadata for run persistence
+      const contextMeta = activePack && contextEnabled
+        ? JSON.stringify({
+          packName: activePack.name,
+          repo: activePack.repo,
+          branch: activePack.branch,
+          briefIncluded: !!activePack.brief,
+          files: activePack.selectedFiles,
+          totalContextTokens: contextTokens,
+        })
+        : null;
+
+      try {
+        await fetch("/api/runs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: runId, content, prompt,
+            models: modelsToRun.map((m) => m.id),
+            contextMetadata: contextMeta,
+          }),
+        });
+      } catch {}
     }
 
     // Add pending cards for new models (keep existing responses)
@@ -229,7 +305,19 @@ export default function Home() {
 
     abortRef.current = false;
     setAborted(false);
-    const newResults = await fanOut(modelsToRun, content, prompt, apiKey, runId, 4096, () => abortRef.current, onUpdate);
+
+    const contextString = getContextString();
+    const newResults = await fanOut({
+      models: modelsToRun,
+      content,
+      prompt,
+      apiKey,
+      runId,
+      maxTokens: 4096,
+      isAborted: () => abortRef.current,
+      onUpdate,
+      context: contextString,
+    });
 
     // Combine with existing successful responses for synthesis
     const allCompleted = [
@@ -237,7 +325,7 @@ export default function Home() {
       ...newResults,
     ];
     await runSynthesis(runId, allCompleted);
-  }, [content, prompt, selectedModels, apiKey, allModels, runSynthesis, responses, currentRunId]);
+  }, [content, prompt, selectedModels, apiKey, allModels, runSynthesis, responses, currentRunId, getContextString, activePack, contextEnabled, contextTokens]);
 
   const handleStop = useCallback(() => {
     abortRef.current = true;
@@ -271,14 +359,25 @@ export default function Home() {
       setResponses((prev) => { const next = new Map(prev); next.set(modelId, response); return next; });
     };
 
-    const newResults = await fanOut(failedModels, content, prompt, apiKey, runId, 4096, () => abortRef.current, onUpdate);
+    const contextString = getContextString();
+    const newResults = await fanOut({
+      models: failedModels,
+      content,
+      prompt,
+      apiKey,
+      runId,
+      maxTokens: 4096,
+      isAborted: () => abortRef.current,
+      onUpdate,
+      context: contextString,
+    });
 
     const allCompleted = [
       ...[...responses.values()].filter((r) => r.status === "complete" && !failedModels.find((m) => m.id === r.model)),
       ...newResults,
     ];
     await runSynthesis(runId, allCompleted);
-  }, [apiKey, allModels, responses, currentRunId, content, prompt, runSynthesis]);
+  }, [apiKey, allModels, responses, currentRunId, content, prompt, runSynthesis, getContextString]);
 
   const completedCount = [...responses.values()].filter((r) => r.status === "complete" || r.status === "error").length;
   const totalCount = responses.size;
@@ -391,8 +490,27 @@ export default function Home() {
                 placeholder="Paste a review, copy draft, strategy doc, code..."
                 rows={10}
                 className="w-full bg-grey-5 border border-border px-4 py-3 text-sm text-ink placeholder:text-grey-30 focus:outline-none focus:border-green resize-y leading-relaxed" />
-              <p className="text-[10px] text-grey-30 mt-1.5 tracking-wide">~{inputTokens.toLocaleString()} tokens estimated</p>
+              <p className="text-[10px] text-grey-30 mt-1.5 tracking-wide">
+                ~{baseInputTokens.toLocaleString()} tokens
+                {contextTokens > 0 && contextEnabled && (
+                  <span className="text-gold"> + {contextTokens.toLocaleString()} context</span>
+                )}
+              </p>
             </div>
+
+            {/* Section: Codebase Context */}
+            <ContextPanel
+              githubPat={githubPat}
+              anthropicKey={anthropicKey}
+              activePack={activePack}
+              contextEnabled={contextEnabled}
+              contentText={content}
+              fileContents={contextFileContents}
+              onPackChange={setActivePack}
+              onContextEnabledChange={setContextEnabled}
+              onFileContentsChange={setContextFileContents}
+              onContextTokensChange={setContextTokens}
+            />
 
             {/* Section: Prompt */}
             <div>
@@ -425,12 +543,30 @@ export default function Home() {
                 onSelectPreset={handleSelectPreset}
               />
               {selectedModels.size > 0 && (
-                <div className="flex justify-between text-[10px] text-grey-40 mt-3 tracking-wide">
-                  <span>Estimated cost</span>
-                  <span className="text-gold font-medium">${costEstimate.toFixed(4)}</span>
+                <div className="space-y-1 mt-3">
+                  <div className="flex justify-between text-[10px] text-grey-40 tracking-wide">
+                    <span>Estimated cost</span>
+                    <span className="text-gold font-medium">${costEstimate.toFixed(4)}</span>
+                  </div>
+                  {contextTokens > 0 && contextEnabled && (
+                    <div className="flex justify-between text-[10px] text-grey-30 tracking-wide">
+                      <span>Context adds</span>
+                      <span className="text-gold">
+                        ~{contextTokens.toLocaleString()} tokens x {selectedModels.size} models
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
+
+            {/* Context active indicator near run button */}
+            {activePack && contextEnabled && (
+              <div className="flex items-center gap-2 text-[10px] text-green bg-green-light px-3 py-2">
+                <span>●</span>
+                <span>Context: {activePack.name} ({contextTokens.toLocaleString()} tokens)</span>
+              </div>
+            )}
 
             {/* Run Button */}
             {status === "running" ? (
@@ -513,7 +649,12 @@ export default function Home() {
                   ) : (
                     <div className="flex items-center gap-3">
                       <div className="w-6 h-px bg-grey-20" />
-                      <span className="overline text-grey-40">{successCount} Responses</span>
+                      <span className="overline text-grey-40">
+                        {successCount} Responses
+                        {activePack && contextEnabled && (
+                          <span className="text-green ml-2">● {activePack.name}</span>
+                        )}
+                      </span>
                     </div>
                   )}
 
