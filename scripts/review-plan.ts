@@ -24,19 +24,25 @@ import { synthesizeDirect } from "../src/lib/synthesis";
 import { buildLocalContext, buildLocalContextString, findRepoRoot, LocalContext } from "../src/lib/local-context";
 import { ModelInfo, ModelResponse, SynthesisResult } from "../src/lib/types";
 
-// --- The 10 free models ---
+// --- The 10-model council ---
 
-const FREE_MODELS: ModelInfo[] = [
+// 10-model council: 5 proven-reliable free + 5 cheap paid for guaranteed coverage.
+// Free tier has account-wide daily quotas — 5 free is the practical ceiling we can
+// count on. The 5 paid slots (all sub-cent) ensure we always hit 10/10 responses.
+// Total cost per plan: ~$0.05 for the 5 paid calls + ~$0.10 for Opus synthesis.
+const COUNCIL_MODELS: ModelInfo[] = [
+  // --- 5 reliable free models (proven 5/5 on 2026-04-10 under quota pressure) ---
   { id: "openai/gpt-oss-120b:free", name: "GPT-OSS 120B", family: "gpt-oss", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
-  { id: "meta-llama/llama-3.3-70b-instruct:free", name: "Llama 3.3 70B", family: "llama", tier: "free", contextLength: 65536, inputCostPer1k: 0, outputCostPer1k: 0 },
-  { id: "qwen/qwen3-next-80b-a3b-instruct:free", name: "Qwen3 Next 80B", family: "qwen", tier: "free", contextLength: 262144, inputCostPer1k: 0, outputCostPer1k: 0 },
-  { id: "qwen/qwen3-coder:free", name: "Qwen3 Coder", family: "qwen-coder", tier: "free", contextLength: 262000, inputCostPer1k: 0, outputCostPer1k: 0 },
-  { id: "google/gemma-4-31b-it:free", name: "Gemma 4 31B", family: "gemma", tier: "free", contextLength: 262144, inputCostPer1k: 0, outputCostPer1k: 0 },
+  { id: "openai/gpt-oss-20b:free", name: "GPT-OSS 20B", family: "gpt-oss-small", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
   { id: "nvidia/nemotron-3-super-120b-a12b:free", name: "Nemotron 3 Super 120B", family: "nemotron", tier: "free", contextLength: 262144, inputCostPer1k: 0, outputCostPer1k: 0 },
+  { id: "nvidia/nemotron-nano-12b-v2-vl:free", name: "Nemotron Nano 12B", family: "nemotron-small", tier: "free", contextLength: 128000, inputCostPer1k: 0, outputCostPer1k: 0 },
   { id: "z-ai/glm-4.5-air:free", name: "GLM 4.5 Air", family: "glm", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
-  { id: "nousresearch/hermes-3-llama-3.1-405b:free", name: "Hermes 3 405B", family: "hermes", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
-  { id: "minimax/minimax-m2.5:free", name: "MiniMax M2.5", family: "minimax", tier: "free", contextLength: 196608, inputCostPer1k: 0, outputCostPer1k: 0 },
-  { id: "cognitivecomputations/dolphin-mistral-24b-venice-edition:free", name: "Dolphin Mistral 24B", family: "mistral", tier: "free", contextLength: 32768, inputCostPer1k: 0, outputCostPer1k: 0 },
+  // --- 5 cheap paid models (guaranteed responses, maximum family diversity) ---
+  { id: "anthropic/claude-haiku-4-5", name: "Claude Haiku 4.5", family: "claude", tier: "fast", contextLength: 200000, inputCostPer1k: 0.001, outputCostPer1k: 0.005 },
+  { id: "openai/gpt-4o-mini", name: "GPT-4o Mini", family: "gpt-4o", tier: "fast", contextLength: 128000, inputCostPer1k: 0.00015, outputCostPer1k: 0.0006 },
+  { id: "google/gemini-2.5-flash", name: "Gemini 2.5 Flash", family: "gemini", tier: "fast", contextLength: 1048576, inputCostPer1k: 0.0003, outputCostPer1k: 0.0025 },
+  { id: "deepseek/deepseek-chat", name: "DeepSeek V3", family: "deepseek", tier: "fast", contextLength: 65536, inputCostPer1k: 0.00027, outputCostPer1k: 0.0011 },
+  { id: "mistralai/mistral-large-2411", name: "Mistral Large", family: "mistral", tier: "fast", contextLength: 131072, inputCostPer1k: 0.002, outputCostPer1k: 0.006 },
 ];
 
 // --- The review prompt ---
@@ -212,7 +218,7 @@ duration-sec: ${data.durationSec}
   lines.push(`# Plan Review: ${planName}`);
   lines.push("");
   lines.push(`Reviewed by ${successfulModels.length} models across ${new Set(successfulModels.map((r) => {
-    const info = FREE_MODELS.find((m) => m.id === r.model);
+    const info = COUNCIL_MODELS.find((m) => m.id === r.model);
     return info?.family ?? "unknown";
   })).size} architectures, synthesized with Claude Opus.`);
   lines.push("");
@@ -338,12 +344,12 @@ async function reviewPlan(
   const contextString = buildLocalContextString(context);
   const planName = path.basename(planPath);
 
-  console.log(`  Fanning out to ${FREE_MODELS.length} free models...`);
+  console.log(`  Fanning out to ${COUNCIL_MODELS.length} council models (5 free + 5 paid)...`);
   const startTime = Date.now();
 
   let completedCount = 0;
   const responses = await fanOut({
-    models: FREE_MODELS,
+    models: COUNCIL_MODELS,
     content: planContent,
     prompt: REVIEW_PROMPT,
     apiKey: openrouterKey,
@@ -354,9 +360,12 @@ async function reviewPlan(
     onUpdate: (modelId, resp) => {
       if (resp.status === "complete" || resp.status === "error") {
         completedCount++;
-        const info = FREE_MODELS.find((m) => m.id === modelId);
+        const info = COUNCIL_MODELS.find((m) => m.id === modelId);
         const symbol = resp.status === "complete" ? "✓" : "✗";
-        process.stdout.write(`    ${symbol} ${info?.name ?? modelId} (${completedCount}/${FREE_MODELS.length})\n`);
+        const suffix = resp.status === "error" && resp.error
+          ? `  [${resp.error.slice(0, 80)}]`
+          : "";
+        process.stdout.write(`    ${symbol} ${info?.name ?? modelId} (${completedCount}/${COUNCIL_MODELS.length})${suffix}\n`);
       }
     },
   });
@@ -368,7 +377,7 @@ async function reviewPlan(
 
   console.log(`  Synthesizing with Claude Opus...`);
   const synthesisResponses = successful.map((r) => {
-    const info = FREE_MODELS.find((m) => m.id === r.model);
+    const info = COUNCIL_MODELS.find((m) => m.id === r.model);
     return {
       model: r.model,
       modelName: r.modelName,
