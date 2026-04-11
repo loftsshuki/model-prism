@@ -1,0 +1,4 @@
+{
+  "planReview": true,
+  "_comment": "This file opts the repo into the global plan-review-cycle hook. When an agent writes docs/plans/YYYY-MM-DD-*.md, it gets auto-reviewed by the 10-model council. Delete this file or set planReview:false to disable."
+}

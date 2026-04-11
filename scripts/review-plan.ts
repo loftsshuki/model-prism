@@ -71,6 +71,8 @@ interface Args {
   force: boolean;
   dryRun: boolean;
   maxCost: number;
+  maxCostPerPlan: number;
+  minSuccessfulModels: number;
   enhance: boolean;
 }
 
@@ -83,22 +85,33 @@ Usage:
   npx tsx scripts/review-plan.ts <plan-file-or-folder> [options]
 
 Options:
-  --batch          Process all .md plans in folder
-  --force          Re-review even if review exists with matching hash
-  --dry-run        Print what would run, no API calls
-  --max-cost N     Abort batch if cumulative cost exceeds N (default: 5)
-  --no-enhance     Skip AI brief enhancement (use template only)
-  --help           Show this help
+  --batch                    Process all .md plans in folder
+  --force                    Re-review even if review exists with matching hash
+  --dry-run                  Print what would run, no API calls
+  --max-cost N               Abort batch if cumulative cost > N dollars (default: 5)
+  --max-cost-per-plan N      Per-plan circuit breaker (default: 1.00)
+  --min-successful-models N  Require N successful responses before synthesis (default: 6)
+  --no-enhance               Skip AI brief enhancement (use template only)
+  --help                     Show this help
 `);
     process.exit(0);
   }
+
+  const getNum = (flag: string, def: number): number => {
+    const idx = argv.indexOf(flag);
+    if (idx === -1 || idx + 1 >= argv.length) return def;
+    const parsed = parseFloat(argv[idx + 1]);
+    return Number.isFinite(parsed) ? parsed : def;
+  };
 
   return {
     target: argv[0],
     batch: argv.includes("--batch"),
     force: argv.includes("--force"),
     dryRun: argv.includes("--dry-run"),
-    maxCost: parseFloat(argv[argv.indexOf("--max-cost") + 1]) || 5.0,
+    maxCost: getNum("--max-cost", 5.0),
+    maxCostPerPlan: getNum("--max-cost-per-plan", 1.0),
+    minSuccessfulModels: Math.floor(getNum("--min-successful-models", 6)),
     enhance: !argv.includes("--no-enhance"),
   };
 }
@@ -371,11 +384,30 @@ async function reviewPlan(
   });
 
   const successful = responses.filter((r) => r.status === "complete" && r.response);
-  if (successful.length < 2) {
-    return { skipped: false, error: `Only ${successful.length} models succeeded — need 2+ for synthesis` };
+  if (successful.length < args.minSuccessfulModels) {
+    return {
+      skipped: false,
+      error: `Only ${successful.length}/${COUNCIL_MODELS.length} models succeeded — need ≥${args.minSuccessfulModels} for reliable synthesis (configure via --min-successful-models)`,
+    };
   }
 
-  console.log(`  Synthesizing with Claude Opus...`);
+  // Estimate synthesis cost as a circuit breaker
+  const totalResponseChars = successful.reduce((sum, r) => sum + (r.response?.length ?? 0), 0);
+  const estimatedSynthesisInputTokens = Math.ceil((totalResponseChars + planContent.length + (contextString?.length ?? 0)) / 4);
+  const estimatedSynthesisOutputTokens = 4000; // typical Opus synthesis output
+  // Opus 4.6: $15/1M input, $75/1M output
+  const estimatedSynthesisCost =
+    (estimatedSynthesisInputTokens / 1_000_000) * 15 +
+    (estimatedSynthesisOutputTokens / 1_000_000) * 75;
+
+  if (estimatedSynthesisCost > args.maxCostPerPlan) {
+    return {
+      skipped: false,
+      error: `Projected Opus synthesis cost ($${estimatedSynthesisCost.toFixed(3)}) exceeds per-plan cap ($${args.maxCostPerPlan.toFixed(2)}). Raise --max-cost-per-plan or reduce plan/context size.`,
+    };
+  }
+
+  console.log(`  Synthesizing with Claude Opus... (estimated cost: $${estimatedSynthesisCost.toFixed(3)})`);
   const synthesisResponses = successful.map((r) => {
     const info = COUNCIL_MODELS.find((m) => m.id === r.model);
     return {
