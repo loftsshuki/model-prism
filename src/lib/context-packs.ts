@@ -338,18 +338,33 @@ export async function enhanceBrief(
 
 export function detectKeyFiles(tree: RepoFile[]): string[] {
   const priorities: Array<{ pattern: RegExp; priority: number }> = [
+    // --- Tier 1: Always include (critical for any plan review) ---
     { pattern: /^package\.json$/, priority: 1 },
-    { pattern: /schema\.prisma$/, priority: 2 },
-    { pattern: /drizzle\.config\./, priority: 2 },
+    { pattern: /schema\.prisma$/, priority: 1 },      // Data model — always relevant
+    { pattern: /drizzle\.config\./, priority: 1 },
+    { pattern: /^CLAUDE\.md$/i, priority: 1 },         // Project conventions
+    { pattern: /^AGENTS\.md$/i, priority: 1 },          // Agent structure + conventions
+
+    // --- Tier 2: Infrastructure files (auth, middleware, nav, types) ---
+    { pattern: /middleware\.(ts|js)$/, priority: 2 },   // Auth middleware — constantly referenced
+    { pattern: /\/(auth|requireAuth|withAuth)\.(ts|js)$/, priority: 2 }, // Auth helpers
+    { pattern: /\/lib\/auth[^/]*\.(ts|js)$/, priority: 2 },
+    { pattern: /admin[_-]?nav\.(ts|tsx|js|jsx)$/, priority: 2 }, // Nav config
+    { pattern: /nav[_-]?config\.(ts|tsx|js|jsx)$/, priority: 2 },
+    { pattern: /sidebar[_-]?config\.(ts|tsx|js|jsx)$/, priority: 2 },
+    { pattern: /\/types\.(ts|d\.ts)$/, priority: 2 },  // Type definitions
+    { pattern: /\/types\/index\.(ts|d\.ts)$/, priority: 2 },
+    { pattern: /\/db\.(ts|js)$/, priority: 2 },         // Database client
+
+    // --- Tier 3: Framework + layout ---
     { pattern: /layout\.(tsx?|jsx?)$/, priority: 3 },
-    { pattern: /^(next|nuxt|svelte|vite|astro)\.config\./, priority: 4 },
-    { pattern: /^tsconfig\.json$/, priority: 5 },
-    { pattern: /^(middleware|auth)\.(ts|js)$/, priority: 6 },
-    { pattern: /\/middleware\.(ts|js)$/, priority: 6 },
-    { pattern: /\/route\.(ts|js)$/, priority: 7 }, // API routes
-    { pattern: /^README\.md$/i, priority: 8 },
-    { pattern: /\/db\.(ts|js)$/, priority: 6 },
-    { pattern: /\/types\.(ts|d\.ts)$/, priority: 7 },
+    { pattern: /^(next|nuxt|svelte|vite|astro)\.config\./, priority: 3 },
+    { pattern: /^tsconfig\.json$/, priority: 3 },
+
+    // --- Tier 4: Supplementary ---
+    { pattern: /\/route\.(ts|js)$/, priority: 4 },     // API routes (sample)
+    { pattern: /^README\.md$/i, priority: 5 },
+    { pattern: /^TRACKING\.md$/i, priority: 5 },        // Current work state
   ];
 
   const candidates: Array<{ path: string; priority: number }> = [];
@@ -366,9 +381,9 @@ export function detectKeyFiles(tree: RepoFile[]): string[] {
     }
   }
 
-  // Sort by priority, take top 10
+  // Sort by priority, take top 20 (expanded from 10 to include infra files)
   candidates.sort((a, b) => a.priority - b.priority);
-  return candidates.slice(0, 10).map((c) => c.path);
+  return candidates.slice(0, 20).map((c) => c.path);
 }
 
 // --- Auto-detect file references in pasted content ---

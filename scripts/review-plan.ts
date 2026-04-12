@@ -23,7 +23,7 @@ import { fanOut } from "../src/lib/fan-out";
 import { synthesizeDirect } from "../src/lib/synthesis";
 import {
   buildLocalContext, buildLocalContextString, findRepoRoot, LocalContext,
-  detectPlanReferencedFiles, loadReferencedFiles,
+  detectPlanReferencedFiles, loadReferencedFiles, detectSemanticReferences,
 } from "../src/lib/local-context";
 import { ModelInfo, ModelResponse, SynthesisResult } from "../src/lib/types";
 
@@ -363,20 +363,32 @@ async function reviewPlan(
     return { skipped: true, skipReason: "dry-run" };
   }
 
-  // Pre-fetch files referenced in the plan — gives council models verified
-  // contents to reason from instead of guessing based on filenames
+  // Layer 1a: Pre-fetch files explicitly referenced by path in the plan
   const referencedPaths = detectPlanReferencedFiles(planContent, context.repoRoot);
   const referencedFiles = loadReferencedFiles(context.repoRoot, referencedPaths);
   const referencedCount = Object.keys(referencedFiles).length;
   if (referencedCount > 0) {
-    console.log(`  Pre-fetched ${referencedCount} plan-referenced file(s) for verification context`);
+    console.log(`  Pre-fetched ${referencedCount} plan-referenced file(s) (explicit paths)`);
   }
+
+  // Layer 1b: Semantic grep — find files defining functions/types/tables mentioned in the plan
+  const existingPaths = new Set([...Object.keys(context.keyFiles), ...referencedPaths]);
+  const semanticPaths = detectSemanticReferences(planContent, context.repoRoot, existingPaths);
+  const semanticFiles = loadReferencedFiles(context.repoRoot, semanticPaths);
+  const semanticCount = Object.keys(semanticFiles).length;
+  if (semanticCount > 0) {
+    console.log(`  Semantic grep found ${semanticCount} additional file(s) defining plan-mentioned identifiers`);
+  }
+
+  // Merge all pre-fetched files
+  const allPreFetched = { ...referencedFiles, ...semanticFiles };
+  const totalPreFetched = Object.keys(allPreFetched).length;
 
   // Build the council context: base brief + pre-fetched files with explicit instruction
   const baseContext = buildLocalContextString(context);
-  const referencedSection = referencedCount > 0
+  const referencedSection = totalPreFetched > 0
     ? `\n\nPLAN-REFERENCED FILES (verified to exist on disk — use these as ground truth, not assumptions):\n\n` +
-      Object.entries(referencedFiles)
+      Object.entries(allPreFetched)
         .map(([p, c]) => `### ${p}\n\`\`\`${p.split(".").pop() || ""}\n${c}\n\`\`\``)
         .join("\n\n")
     : "";

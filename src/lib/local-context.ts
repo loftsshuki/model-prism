@@ -199,6 +199,156 @@ export function loadReferencedFiles(repoRoot: string, paths: string[]): Record<s
   return result;
 }
 
+// --- Semantic grep: find files defining identifiers mentioned in the plan ---
+
+/**
+ * Extracts code identifiers from plan text (function names, component names,
+ * table names, etc.) and greps the codebase for files that DEFINE them.
+ *
+ * This catches implicit references like "uses requireAuth('admin')" or
+ * "the data_change_events table" that aren't file paths but DO reference
+ * specific code the council needs to see to avoid hallucinating.
+ */
+export function detectSemanticReferences(
+  planContent: string,
+  repoRoot: string,
+  existingPaths: Set<string> // already-loaded files to skip
+): string[] {
+  // Extract candidate identifiers from the plan
+  const identifiers = new Set<string>();
+
+  // camelCase and PascalCase identifiers (≥6 chars to filter noise)
+  const camelPascalRe = /\b([A-Z][a-zA-Z0-9]{5,}|[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]{2,})\b/g;
+  let match: RegExpExecArray | null;
+  while ((match = camelPascalRe.exec(planContent)) !== null) {
+    identifiers.add(match[1]);
+  }
+
+  // snake_case identifiers (likely table names, config keys)
+  const snakeRe = /\b([a-z][a-z0-9]*(?:_[a-z0-9]+){1,})\b/g;
+  while ((match = snakeRe.exec(planContent)) !== null) {
+    identifiers.add(match[1]);
+  }
+
+  // Backtick-quoted identifiers (inline code in markdown)
+  const backtickRe = /`([a-zA-Z][a-zA-Z0-9_./]{3,})`/g;
+  while ((match = backtickRe.exec(planContent)) !== null) {
+    // Skip obvious file paths (handled by detectPlanReferencedFiles)
+    if (match[1].includes("/") && match[1].includes(".")) continue;
+    identifiers.add(match[1]);
+  }
+
+  // Filter out common English words and framework keywords that aren't code references
+  const NOISE_WORDS = new Set([
+    "Status", "Sprint", "Action", "Before", "After", "Create", "Update", "Delete",
+    "Remove", "Should", "Frontend", "Backend", "Testing", "Changes", "Required",
+    "Missing", "Current", "Default", "Section", "Implementation", "Component",
+    "Function", "Returns", "Accepts", "Existing", "Expected", "Example", "Summary",
+    "Priority", "Critical", "Important", "Optional", "Background", "Sequence",
+    "Boolean", "String", "Number", "Object", "Promise", "Response", "Request",
+    "Middleware", "Database", "Migration", "Deployment", "Production", "Development",
+    "Documentation", "Configuration", "Environment", "Application", "Interface",
+    "NextResponse", "NextRequest", "ReactNode", "useState", "useEffect", "useCallback",
+    "useRouter", "useParams", "useSearchParams", "className", "onClick", "onChange",
+    "disabled", "children", "undefined", "console", "process", "module", "exports",
+    "require", "import", "export", "default", "return", "function", "const",
+  ]);
+
+  const filtered = [...identifiers].filter((id) => {
+    if (NOISE_WORDS.has(id)) return false;
+    if (id.length < 4) return false;
+    // Skip pure uppercase (likely constants like TODO, API, URL)
+    if (id === id.toUpperCase()) return false;
+    return true;
+  });
+
+  // Grep the codebase for each identifier — find where it's DEFINED
+  const foundFiles = new Map<string, number>(); // path → number of matches
+
+  const searchDirs = ["src", "app", "lib", "components", "server", "prisma", "scripts"];
+
+  for (const identifier of filtered.slice(0, 30)) { // cap to prevent explosion
+    for (const dir of searchDirs) {
+      const searchDir = path.join(repoRoot, dir);
+      if (!fs.existsSync(searchDir)) continue;
+
+      try {
+        // Use a simple recursive file search with content matching
+        // Look for definition patterns: export function X, const X, table X, model X
+        const defPatterns = [
+          `export function ${identifier}`,
+          `export const ${identifier}`,
+          `export async function ${identifier}`,
+          `function ${identifier}`,
+          `const ${identifier}`,
+          `model ${identifier}`,          // Prisma model
+          `table ${identifier}`,          // SQL table
+          `CREATE TABLE ${identifier}`,
+          `interface ${identifier}`,
+          `type ${identifier}`,
+          `class ${identifier}`,
+          `export { ${identifier}`,
+        ];
+
+        grepDir(searchDir, repoRoot, identifier, defPatterns, foundFiles, existingPaths);
+      } catch { /* skip */ }
+    }
+  }
+
+  // Sort by match count (most relevant first), take top 10
+  const sorted = [...foundFiles.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([p]) => p);
+
+  return sorted;
+}
+
+function grepDir(
+  dir: string,
+  repoRoot: string,
+  identifier: string,
+  defPatterns: string[],
+  foundFiles: Map<string, number>,
+  existingPaths: Set<string>,
+  depth = 0
+): void {
+  if (depth > 5) return; // don't go too deep
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch { return; }
+
+  for (const entry of entries) {
+    if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+
+    const fullPath = path.join(dir, entry.name);
+    const relPath = path.relative(repoRoot, fullPath).replace(/\\/g, "/");
+
+    if (entry.isDirectory()) {
+      grepDir(fullPath, repoRoot, identifier, defPatterns, foundFiles, existingPaths, depth + 1);
+    } else if (entry.isFile()) {
+      if (existingPaths.has(relPath)) continue; // already loaded
+      const ext = entry.name.split(".").pop()?.toLowerCase() || "";
+      if (!["ts", "tsx", "js", "jsx", "prisma", "sql"].includes(ext)) continue;
+
+      try {
+        const stat = fs.statSync(fullPath);
+        if (stat.size > 50_000) continue;
+
+        const content = fs.readFileSync(fullPath, "utf-8");
+        for (const pattern of defPatterns) {
+          if (content.includes(pattern)) {
+            foundFiles.set(relPath, (foundFiles.get(relPath) || 0) + 1);
+            break; // one match per file is enough
+          }
+        }
+      } catch { /* skip */ }
+    }
+  }
+}
+
 // --- Build local context for a repo ---
 
 export interface LocalContext {
