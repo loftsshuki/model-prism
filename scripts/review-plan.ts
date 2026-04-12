@@ -21,7 +21,10 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { fanOut } from "../src/lib/fan-out";
 import { synthesizeDirect } from "../src/lib/synthesis";
-import { buildLocalContext, buildLocalContextString, findRepoRoot, LocalContext } from "../src/lib/local-context";
+import {
+  buildLocalContext, buildLocalContextString, findRepoRoot, LocalContext,
+  detectPlanReferencedFiles, loadReferencedFiles,
+} from "../src/lib/local-context";
 import { ModelInfo, ModelResponse, SynthesisResult } from "../src/lib/types";
 
 // --- The 10-model council ---
@@ -49,11 +52,17 @@ const COUNCIL_MODELS: ModelInfo[] = [
 
 const REVIEW_PROMPT = `You are reviewing an implementation plan for a software project. The plan is a detailed spec that will be executed by engineers.
 
+**IMPORTANT — Verification rules:**
+- The CODEBASE CONTEXT below may include a "PLAN-REFERENCED FILES" section with the actual contents of files the plan mentions. **Treat these as ground truth.**
+- Before flagging anything as a "FATAL FLAW", verify the file or symbol you're concerned about appears in PLAN-REFERENCED FILES. If it does, read the actual code — do not guess from the filename.
+- If a file is NOT shown in PLAN-REFERENCED FILES, your concern about it is "unverified" — mark it as a LANDMINE or GAP, never a FATAL FLAW.
+- Never invent file paths, function names, or type signatures. If you don't see it in the provided context, say "needs verification" instead of asserting.
+
 Produce a critical review covering:
 
-**1. FATAL FLAWS** — Anything that will break the implementation outright. Be specific: what fails, when, and why.
+**1. FATAL FLAWS** — Anything that will break the implementation outright, *verifiable against the provided file contents*. Be specific: what fails, when, why, and which line of which file.
 
-**2. LANDMINES** — Things that work in demos but detonate in production. Edge cases, scale issues, race conditions, security gaps.
+**2. LANDMINES** — Things that work in demos but detonate in production. Edge cases, scale issues, race conditions, security gaps. May be unverified if grounded in patterns rather than specific code.
 
 **3. GAPS** — Missing pieces. What's assumed but not specified? What's implied but not implemented?
 
@@ -61,7 +70,7 @@ Produce a critical review covering:
 
 **5. EXECUTION RISKS** — What will actually go wrong during implementation? Ordering issues, dependency problems, things that'll require rework.
 
-Be specific, technical, and adversarial. Cite file paths and function names when possible. Don't pad the review with generic advice. If a section has nothing worth saying, say so in one line and move on.`;
+Be specific, technical, and adversarial. Cite file paths and line numbers when possible (especially when verified against PLAN-REFERENCED FILES). Don't pad the review with generic advice. If a section has nothing worth saying, say so in one line and move on.`;
 
 // --- Args parsing ---
 
@@ -354,7 +363,25 @@ async function reviewPlan(
     return { skipped: true, skipReason: "dry-run" };
   }
 
-  const contextString = buildLocalContextString(context);
+  // Pre-fetch files referenced in the plan — gives council models verified
+  // contents to reason from instead of guessing based on filenames
+  const referencedPaths = detectPlanReferencedFiles(planContent, context.repoRoot);
+  const referencedFiles = loadReferencedFiles(context.repoRoot, referencedPaths);
+  const referencedCount = Object.keys(referencedFiles).length;
+  if (referencedCount > 0) {
+    console.log(`  Pre-fetched ${referencedCount} plan-referenced file(s) for verification context`);
+  }
+
+  // Build the council context: base brief + pre-fetched files with explicit instruction
+  const baseContext = buildLocalContextString(context);
+  const referencedSection = referencedCount > 0
+    ? `\n\nPLAN-REFERENCED FILES (verified to exist on disk — use these as ground truth, not assumptions):\n\n` +
+      Object.entries(referencedFiles)
+        .map(([p, c]) => `### ${p}\n\`\`\`${p.split(".").pop() || ""}\n${c}\n\`\`\``)
+        .join("\n\n")
+    : "";
+
+  const contextString = baseContext + referencedSection;
   const planName = path.basename(planPath);
 
   console.log(`  Fanning out to ${COUNCIL_MODELS.length} council models (5 free + 5 paid)...`);

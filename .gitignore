@@ -48,3 +48,4 @@ next-env.d.ts
 
 # session state — local-only
 .session.json
+.verifier-personas/

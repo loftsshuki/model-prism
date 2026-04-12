@@ -136,6 +136,69 @@ export function readLocalFile(repoRoot: string, relativePath: string): string | 
   }
 }
 
+// --- Detect plan-referenced files and pre-fetch their contents ---
+
+/**
+ * Scans plan content for path references (e.g. "app/src/app/search/SearchClient.tsx")
+ * and returns paths that exist in the repo. Used to give council models verified
+ * file contents before they review the plan, cutting hallucinations at the source.
+ */
+export function detectPlanReferencedFiles(planContent: string, repoRoot: string): string[] {
+  // Match common path patterns: src/..., app/..., lib/..., components/..., etc.
+  // Also matches `path/to/file.ext` and quoted "path/to/file.ext"
+  const patterns = [
+    /(?:^|[\s"'`(,/])(((?:src|app|lib|components|pages|public|api|utils|hooks|services|config|test|tests|scripts|styles|assets|prisma|drizzle|server|client|shared|core|types|models|db|migrations)\/)[^\s"'`),;:]+\.[a-zA-Z]{1,6})/gm,
+    // Also catch absolute paths like "C:/Dev/.../foo.ts" or relative ./foo.ts
+    /(?:^|[\s"'`(])(\.\.?\/[^\s"'`),;:]+\.[a-zA-Z]{1,6})/gm,
+  ];
+
+  const found = new Set<string>();
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(planContent)) !== null) {
+      found.add(match[1].trim());
+    }
+  }
+
+  // Verify each candidate exists in the repo
+  const verified: string[] = [];
+  for (const candidate of found) {
+    // Try direct path
+    const direct = path.join(repoRoot, candidate);
+    if (fs.existsSync(direct) && fs.statSync(direct).isFile()) {
+      verified.push(candidate.replace(/\\/g, "/"));
+      continue;
+    }
+    // Try without leading ./
+    const stripped = candidate.replace(/^\.\.?\//, "");
+    const stripPath = path.join(repoRoot, stripped);
+    if (fs.existsSync(stripPath) && fs.statSync(stripPath).isFile()) {
+      verified.push(stripped.replace(/\\/g, "/"));
+    }
+  }
+
+  // Cap and dedupe — never load more than 15 referenced files (cost control)
+  return [...new Set(verified)].slice(0, 15);
+}
+
+/**
+ * Reads referenced files into a record. Skips files >50KB and runs secret scrubbing.
+ */
+export function loadReferencedFiles(repoRoot: string, paths: string[]): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const relPath of paths) {
+    const fullPath = path.join(repoRoot, relPath);
+    try {
+      const stat = fs.statSync(fullPath);
+      if (stat.size > 50_000) continue; // skip large files
+      const content = fs.readFileSync(fullPath, "utf-8");
+      const { scrubbed } = scrubSecrets(content);
+      result[relPath] = scrubbed;
+    } catch { /* skip */ }
+  }
+  return result;
+}
+
 // --- Build local context for a repo ---
 
 export interface LocalContext {
