@@ -27,13 +27,23 @@ import {
 } from "../src/lib/local-context";
 import { ModelInfo, ModelResponse, SynthesisResult } from "../src/lib/types";
 
-// --- The 10-model council ---
+// --- Council rosters ---
+//
+// `default`  → volume-optimized for per-plan review (runs daily via plan-review-cycle
+//              hook). 5 free + 5 cheap paid, ~$0.05/fan-out + ~$0.10 Opus synthesis.
+// `frontier` → quality-optimized for meta-reviews and high-value second-passes.
+//              Keeps 3 proven free slots + Haiku, swaps the 6 under-performers for
+//              frontier reasoning models. ~$1.13/fan-out + ~$1.67 Opus synthesis.
+//              Selected via `--roster frontier` or programmatic callers.
+//
+// Swap rationale (derived from Layer 2 second-pass theme-matrix, 2026-04-17):
+//   - gpt-oss-20b + nemotron-nano-12b: shadows of their 120B siblings, low signal
+//   - gpt-4o-mini: lowest theme-coverage scorer (4/24)
+//   - gemini-2.5-flash: fine for throughput; 2.5-pro is notably stronger for gap analysis
+//   - deepseek-chat (V3): replaced by R1 thinking for explicit reasoning
+//   - mistral-large-2411: Nov-2024 model, now dated — Kimi K2 Thinking is stronger
 
-// 10-model council: 5 proven-reliable free + 5 cheap paid for guaranteed coverage.
-// Free tier has account-wide daily quotas — 5 free is the practical ceiling we can
-// count on. The 5 paid slots (all sub-cent) ensure we always hit 10/10 responses.
-// Total cost per plan: ~$0.05 for the 5 paid calls + ~$0.10 for Opus synthesis.
-const COUNCIL_MODELS: ModelInfo[] = [
+const DEFAULT_COUNCIL: ModelInfo[] = [
   // --- 5 reliable free models (proven 5/5 on 2026-04-10 under quota pressure) ---
   { id: "openai/gpt-oss-120b:free", name: "GPT-OSS 120B", family: "gpt-oss", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
   { id: "openai/gpt-oss-20b:free", name: "GPT-OSS 20B", family: "gpt-oss-small", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
@@ -47,6 +57,26 @@ const COUNCIL_MODELS: ModelInfo[] = [
   { id: "deepseek/deepseek-chat", name: "DeepSeek V3", family: "deepseek", tier: "fast", contextLength: 65536, inputCostPer1k: 0.00027, outputCostPer1k: 0.0011 },
   { id: "mistralai/mistral-large-2411", name: "Mistral Large", family: "mistral", tier: "fast", contextLength: 131072, inputCostPer1k: 0.002, outputCostPer1k: 0.006 },
 ];
+
+const FRONTIER_COUNCIL: ModelInfo[] = [
+  // --- 3 proven free slots (kept from default for cost anchor + diversity) ---
+  { id: "openai/gpt-oss-120b:free", name: "GPT-OSS 120B", family: "gpt-oss", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
+  { id: "nvidia/nemotron-3-super-120b-a12b:free", name: "Nemotron 3 Super 120B", family: "nemotron", tier: "free", contextLength: 262144, inputCostPer1k: 0, outputCostPer1k: 0 },
+  { id: "z-ai/glm-4.5-air:free", name: "GLM 4.5 Air", family: "glm", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
+  // --- 7 paid frontier/reasoning slots, one per distinct family ---
+  { id: "anthropic/claude-haiku-4-5", name: "Claude Haiku 4.5", family: "claude", tier: "fast", contextLength: 200000, inputCostPer1k: 0.001, outputCostPer1k: 0.005 },
+  { id: "openai/gpt-5.4", name: "GPT-5.4", family: "gpt-5", tier: "fast", contextLength: 1050000, inputCostPer1k: 0.0025, outputCostPer1k: 0.015 },
+  { id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro", family: "gemini", tier: "fast", contextLength: 1048576, inputCostPer1k: 0.00125, outputCostPer1k: 0.010 },
+  { id: "x-ai/grok-4.20-multi-agent", name: "Grok 4.20 Multi-Agent", family: "grok", tier: "fast", contextLength: 2000000, inputCostPer1k: 0.002, outputCostPer1k: 0.006 },
+  { id: "qwen/qwen3.6-plus", name: "Qwen 3.6 Plus", family: "qwen", tier: "fast", contextLength: 1000000, inputCostPer1k: 0.00033, outputCostPer1k: 0.00195 },
+  { id: "deepseek/deepseek-r1-0528", name: "DeepSeek R1", family: "deepseek-r1", tier: "fast", contextLength: 163840, inputCostPer1k: 0.0005, outputCostPer1k: 0.00215 },
+  { id: "moonshotai/kimi-k2-thinking", name: "Kimi K2 Thinking", family: "kimi", tier: "fast", contextLength: 262144, inputCostPer1k: 0.0006, outputCostPer1k: 0.0025 },
+];
+
+const ROSTERS: Record<string, ModelInfo[]> = {
+  default: DEFAULT_COUNCIL,
+  frontier: FRONTIER_COUNCIL,
+};
 
 // --- The review prompt ---
 
@@ -88,6 +118,7 @@ interface Args {
   synthesisPromptPath: string | null; // override Opus synthesis trailing instructions
   outputPath: string | null;          // explicit output path; bypasses getReviewPath()
   excludeModels: string[];            // repeatable: model IDs to drop from council
+  roster: string | null;              // roster preset name; defaults to 'default'
 }
 
 function parseArgs(): Args {
@@ -116,6 +147,14 @@ Options:
   --exclude-model <id>       Drop a council model by ID (repeatable). Useful on
                              second-pass to drop the primary reviewer's model family
                              for maximum divergence (e.g. --exclude-model anthropic/claude-haiku-4-5)
+  --roster <name>            Select a council preset. Options:
+                               default  (current behavior — 5 free + 5 cheap paid,
+                                        ~$0.15/run, tuned for plan-review throughput)
+                               frontier (3 free + 7 frontier reasoning models —
+                                        GPT-5.4, Gemini 2.5 Pro, Grok 4.20, Qwen 3.6
+                                        Plus, DeepSeek R1, Kimi K2 Thinking, Haiku
+                                        4.5. ~$2-3/run, tuned for meta-reviews and
+                                        high-value second-passes)
   --help                     Show this help
 `);
     process.exit(0);
@@ -157,6 +196,7 @@ Options:
     synthesisPromptPath: getStr("--synthesis-prompt"),
     outputPath: getStr("--output-path"),
     excludeModels: getStrArray("--exclude-model"),
+    roster: getStr("--roster"),
   };
 }
 
@@ -276,6 +316,9 @@ function writeReviewFile(data: ReviewData): string {
   const planName = path.basename(data.planPath, ".md");
   const successfulModels = data.modelResponses.filter((r) => r.status === "complete");
   const failedModels = data.modelResponses.filter((r) => r.status === "error");
+  // Look up model family from the roster that was actually used for THIS run
+  // (not a hardcoded constant, since --roster can switch which 10 models ran).
+  const rosterLookup = data.usedModels;
 
   // In custom-review mode (--review-prompt), use neutral frontmatter + title so the
   // output doesn't falsely assert it reviewed a "plan" when the input was e.g. a
@@ -302,7 +345,7 @@ duration-sec: ${data.durationSec}
   lines.push(`# ${title}: ${planName}`);
   lines.push("");
   lines.push(`Reviewed by ${successfulModels.length} models across ${new Set(successfulModels.map((r) => {
-    const info = COUNCIL_MODELS.find((m) => m.id === r.model);
+    const info = rosterLookup.find((m) => m.id === r.model);
     return info?.family ?? "unknown";
   })).size} architectures, synthesized with Claude Opus.`);
   lines.push("");
@@ -486,12 +529,12 @@ async function reviewPlan(
     onUpdate: (modelId, resp) => {
       if (resp.status === "complete" || resp.status === "error") {
         completedCount++;
-        const info = COUNCIL_MODELS.find((m) => m.id === modelId);
+        const info = activeCouncilModels.find((m) => m.id === modelId);
         const symbol = resp.status === "complete" ? "✓" : "✗";
         const suffix = resp.status === "error" && resp.error
           ? `  [${resp.error.slice(0, 80)}]`
           : "";
-        process.stdout.write(`    ${symbol} ${info?.name ?? modelId} (${completedCount}/${COUNCIL_MODELS.length})${suffix}\n`);
+        process.stdout.write(`    ${symbol} ${info?.name ?? modelId} (${completedCount}/${activeCouncilModels.length})${suffix}\n`);
       }
     },
   });
@@ -591,15 +634,28 @@ async function main(): Promise<number> {
     ? loadPromptFile(args.synthesisPromptPath, "synthesis-prompt")
     : null;
 
-  // Filter council models. --exclude-model is repeatable and matches full model IDs.
+  // Select roster. `default` = volume-optimized (current plan-review behavior);
+  // `frontier` = quality-optimized for meta-reviews + high-value second-passes.
+  const rosterName = args.roster ?? "default";
+  const selectedRoster = ROSTERS[rosterName];
+  if (!selectedRoster) {
+    console.error(`Error: --roster value '${rosterName}' is not valid. Choose from: ${Object.keys(ROSTERS).join(", ")}`);
+    process.exit(1);
+  }
+  if (rosterName !== "default") {
+    console.log(`Using '${rosterName}' roster (${selectedRoster.length} models)`);
+  }
+
+  // Filter the selected roster by --exclude-model. Validates against the SELECTED
+  // roster (not the default) so exclusions + roster choice compose cleanly.
   const excludeSet = new Set(args.excludeModels);
-  const activeCouncilModels = COUNCIL_MODELS.filter((m) => !excludeSet.has(m.id));
+  const activeCouncilModels = selectedRoster.filter((m) => !excludeSet.has(m.id));
   if (excludeSet.size > 0) {
     const excluded = [...excludeSet];
-    const missing = excluded.filter((id) => !COUNCIL_MODELS.some((m) => m.id === id));
+    const missing = excluded.filter((id) => !selectedRoster.some((m) => m.id === id));
     if (missing.length > 0) {
-      console.error(`Error: --exclude-model value(s) not in council: ${missing.join(", ")}`);
-      console.error(`Valid IDs: ${COUNCIL_MODELS.map((m) => m.id).join(", ")}`);
+      console.error(`Error: --exclude-model value(s) not in '${rosterName}' roster: ${missing.join(", ")}`);
+      console.error(`Valid IDs for this roster: ${selectedRoster.map((m) => m.id).join(", ")}`);
       process.exit(1);
     }
     console.log(`Excluding ${excluded.length} model(s) from council: ${excluded.join(", ")}`);
