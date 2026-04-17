@@ -121,7 +121,10 @@ export async function synthesizeDirect(
   context?: string,
   customSynthesisInstructions?: string | null
 ): Promise<SynthesisResult> {
-  const modelId = synthesisModel === "opus" ? "claude-opus-4-6" : "claude-sonnet-4-6";
+  // Opus 4.7 is the current top-of-family at session date (2026-04-17). Kept
+  // a constant rather than hardcoded literal downstream so the "opus"/"sonnet"
+  // dispatch at callsites still reads cleanly.
+  const modelId = synthesisModel === "opus" ? "claude-opus-4-7" : "claude-sonnet-4-6";
   const prompt = buildSynthesisPrompt(content, analysisPrompt, responses, context, customSynthesisInstructions);
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
