@@ -33,19 +33,22 @@ import { ModelInfo, ModelResponse, SynthesisResult } from "../src/lib/types";
 // Free tier has account-wide daily quotas — 5 free is the practical ceiling we can
 // count on. The 5 paid slots (all sub-cent) ensure we always hit 10/10 responses.
 // Total cost per plan: ~$0.05 for the 5 paid calls + ~$0.10 for Opus synthesis.
+// Refreshed 2026-05-03 — swapped to current OpenRouter catalog. 11 distinct
+// families across paid+free for adversarial diversity.
 const COUNCIL_MODELS: ModelInfo[] = [
-  // --- 5 reliable free models (proven 5/5 on 2026-04-10 under quota pressure) ---
+  // --- 6 reliable free models (refreshed 2026-05-03; 6 distinct families) ---
   { id: "openai/gpt-oss-120b:free", name: "GPT-OSS 120B", family: "gpt-oss", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
-  { id: "openai/gpt-oss-20b:free", name: "GPT-OSS 20B", family: "gpt-oss-small", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
+  { id: "qwen/qwen3-coder:free", name: "Qwen3 Coder", family: "qwen", tier: "free", contextLength: 262000, inputCostPer1k: 0, outputCostPer1k: 0 },
   { id: "nvidia/nemotron-3-super-120b-a12b:free", name: "Nemotron 3 Super 120B", family: "nemotron", tier: "free", contextLength: 262144, inputCostPer1k: 0, outputCostPer1k: 0 },
-  { id: "nvidia/nemotron-nano-12b-v2-vl:free", name: "Nemotron Nano 12B", family: "nemotron-small", tier: "free", contextLength: 128000, inputCostPer1k: 0, outputCostPer1k: 0 },
-  { id: "z-ai/glm-4.5-air:free", name: "GLM 4.5 Air", family: "glm", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
-  // --- 5 cheap paid models (guaranteed responses, maximum family diversity) ---
+  { id: "tencent/hy3-preview:free", name: "Tencent HY3", family: "tencent", tier: "free", contextLength: 262144, inputCostPer1k: 0, outputCostPer1k: 0 },
+  { id: "nousresearch/hermes-3-llama-3.1-405b:free", name: "Hermes 3 405B", family: "hermes-llama", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
+  { id: "openrouter/owl-alpha", name: "Owl Alpha", family: "owl", tier: "free", contextLength: 1048756, inputCostPer1k: 0, outputCostPer1k: 0 },
+  // --- 5 cheap paid models (refreshed 2026-05-03; max family diversity) ---
   { id: "anthropic/claude-haiku-4-5", name: "Claude Haiku 4.5", family: "claude", tier: "fast", contextLength: 200000, inputCostPer1k: 0.001, outputCostPer1k: 0.005 },
-  { id: "openai/gpt-4o-mini", name: "GPT-4o Mini", family: "gpt-4o", tier: "fast", contextLength: 128000, inputCostPer1k: 0.00015, outputCostPer1k: 0.0006 },
+  { id: "moonshotai/kimi-k2.6", name: "Kimi K2.6", family: "kimi", tier: "fast", contextLength: 262142, inputCostPer1k: 0.00074, outputCostPer1k: 0.00349 },
   { id: "google/gemini-2.5-flash", name: "Gemini 2.5 Flash", family: "gemini", tier: "fast", contextLength: 1048576, inputCostPer1k: 0.0003, outputCostPer1k: 0.0025 },
-  { id: "deepseek/deepseek-chat", name: "DeepSeek V3", family: "deepseek", tier: "fast", contextLength: 65536, inputCostPer1k: 0.00027, outputCostPer1k: 0.0011 },
-  { id: "mistralai/mistral-large-2411", name: "Mistral Large", family: "mistral", tier: "fast", contextLength: 131072, inputCostPer1k: 0.002, outputCostPer1k: 0.006 },
+  { id: "deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro", family: "deepseek", tier: "fast", contextLength: 1048576, inputCostPer1k: 0.000435, outputCostPer1k: 0.00087 },
+  { id: "x-ai/grok-4.3", name: "Grok 4.3", family: "grok", tier: "fast", contextLength: 1000000, inputCostPer1k: 0.00125, outputCostPer1k: 0.0025 },
 ];
 
 // --- The review prompt ---
@@ -396,7 +399,9 @@ async function reviewPlan(
   const contextString = baseContext + referencedSection;
   const planName = path.basename(planPath);
 
-  console.log(`  Fanning out to ${COUNCIL_MODELS.length} council models (5 free + 5 paid)...`);
+  const _free = COUNCIL_MODELS.filter((m) => m.tier === "free").length;
+  const _paid = COUNCIL_MODELS.length - _free;
+  console.log(`  Fanning out to ${COUNCIL_MODELS.length} council models (${_free} free + ${_paid} paid)...`);
   const startTime = Date.now();
 
   let completedCount = 0;
