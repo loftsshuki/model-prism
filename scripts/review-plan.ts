@@ -338,7 +338,7 @@ content-hash: ${data.contentHash}
 context-repo: ${data.contextRepo}
 models-succeeded: ${successfulModels.length}
 models-failed: ${failedModels.length}
-synthesis-model: claude-opus-4-6
+synthesis-model: claude-opus-4-8
 total-input-tokens: ${data.totalInputTokens}
 total-output-tokens: ${data.totalOutputTokens}
 duration-sec: ${data.durationSec}
