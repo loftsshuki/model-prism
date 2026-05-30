@@ -111,6 +111,16 @@ export const SynthesisJsonSchema = {
   },
 };
 
+// Anthropic API model IDs for the synthesis step. Single source of truth — exported
+// so callers (e.g. the review-frontmatter writer) record exactly the model that ran
+// instead of a hardcoded literal that silently drifts out of date.
+// Opus 4.8 is the current top-of-family (2026-05-30) and prices identically to 4.6/4.7
+// ($5/$25 per M) — a free quality upgrade for the synthesis step.
+export const SYNTHESIS_MODEL_IDS: Record<"sonnet" | "opus", string> = {
+  opus: "claude-opus-4-8",
+  sonnet: "claude-sonnet-4-6",
+};
+
 // Call Anthropic directly from the browser — no Vercel timeout
 export async function synthesizeDirect(
   anthropicKey: string,
@@ -121,11 +131,7 @@ export async function synthesizeDirect(
   context?: string,
   customSynthesisInstructions?: string | null
 ): Promise<SynthesisResult> {
-  // Opus 4.8 is the current top-of-family (2026-05-30) and prices identically to
-  // 4.6/4.7 ($5/$25 per M) — a free quality upgrade for the synthesis step. Kept
-  // a constant rather than hardcoded literal downstream so the "opus"/"sonnet"
-  // dispatch at callsites still reads cleanly.
-  const modelId = synthesisModel === "opus" ? "claude-opus-4-8" : "claude-sonnet-4-6";
+  const modelId = SYNTHESIS_MODEL_IDS[synthesisModel];
   const prompt = buildSynthesisPrompt(content, analysisPrompt, responses, context, customSynthesisInstructions);
 
   // Bounded retry for the synthesis call ONLY. The fan-out `responses` are already in
