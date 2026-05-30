@@ -77,6 +77,8 @@ export interface ModelResponse {
   inputTokens?: number;
   outputTokens?: number;
   cost?: number;
+  /** Set when a flaky model failed and a reliable substitute answered this slot. */
+  fallbackFrom?: string;
 }
 
 export interface RunState {
