@@ -8,6 +8,34 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// Auto-fallback substitution: the `:free` OpenRouter tier rate-limits (429) and
+// suffers provider outages (503 "no healthy upstream"). When a free model exhausts
+// its retries, swap in a reliable substitute so the council slot isn't lost.
+// Preference: the SAME model's paid variant (identical voice, reliable provider);
+// otherwise a cheap reliable generalist. All IDs verified against the OpenRouter
+// catalog 2026-05-29. Costs are per-1k tokens.
+interface FallbackTarget {
+  id: string;
+  name: string;
+  inputCostPer1k: number;
+  outputCostPer1k: number;
+}
+
+const FALLBACK_MAP: Record<string, FallbackTarget> = {
+  // GPT-OSS free endpoints 503 frequently → their paid variants (same model).
+  "openai/gpt-oss-120b:free": { id: "openai/gpt-oss-120b", name: "GPT-OSS 120B (paid)", inputCostPer1k: 0.00009, outputCostPer1k: 0.00045 },
+  "openai/gpt-oss-20b:free": { id: "openai/gpt-oss-20b", name: "GPT-OSS 20B (paid)", inputCostPer1k: 0.00004, outputCostPer1k: 0.00015 },
+};
+
+// Any other `:free` model with no specific mapping falls back to a cheap, reliable
+// generalist so a single flaky free slot never drops the council below quorum.
+const DEFAULT_FREE_FALLBACK: FallbackTarget = {
+  id: "google/gemini-2.0-flash-001",
+  name: "Gemini 2.0 Flash (fallback)",
+  inputCostPer1k: 0.0001,
+  outputCostPer1k: 0.0004,
+};
+
 // Call OpenRouter directly from the browser — no Vercel timeout ceiling
 async function callDirect(
   model: string,
@@ -174,6 +202,28 @@ async function invokeModel(
     if (runId) persistResponse(runId, model, result);
     return result;
   } catch (error) {
+    // Auto-fallback: a flaky model (typically a `:free` slot that 429'd or 503'd
+    // past its retries) failed. Substitute a reliable model so the council keeps
+    // quorum, recording which slot was substituted via `fallbackFrom`.
+    const fb = FALLBACK_MAP[model.id] ?? (isFree ? DEFAULT_FREE_FALLBACK : undefined);
+    if (fb && !isAborted()) {
+      try {
+        const data = await callDirect(fb.id, content, prompt, apiKey, maxTokens, 3, context);
+        result.status = "complete";
+        result.response = data.response;
+        result.timeMs = data.timeMs;
+        result.inputTokens = data.inputTokens;
+        result.outputTokens = data.outputTokens;
+        result.cost = (data.inputTokens / 1000) * fb.inputCostPer1k + (data.outputTokens / 1000) * fb.outputCostPer1k;
+        result.fallbackFrom = model.id;
+        result.modelName = `${model.name} → ${fb.name}`;
+        onUpdate(result);
+        if (runId) persistResponse(runId, model, result);
+        return result;
+      } catch {
+        // Substitute also failed — fall through to error below.
+      }
+    }
     result.status = "error";
     result.error = error instanceof Error ? error.message : "Network error";
     onUpdate(result);
