@@ -28,7 +28,7 @@ import {
 import { ModelInfo, ModelResponse, SynthesisResult } from "../src/lib/types";
 // Council rosters live in their own module so the freshness checker
 // (scripts/check-roster-freshness.ts) reads the exact rosters that run here.
-import { ROSTERS } from "../src/lib/rosters";
+import { ROSTERS, resolveAutoRoster, AUTO_THRESHOLD_TOKENS } from "../src/lib/rosters";
 import { buildRunTelemetry, appendRunTelemetry } from "../src/lib/telemetry";
 
 // --- The review prompt ---
@@ -71,7 +71,8 @@ interface Args {
   synthesisPromptPath: string | null; // override Opus synthesis trailing instructions
   outputPath: string | null;          // explicit output path; bypasses getReviewPath()
   excludeModels: string[];            // repeatable: model IDs to drop from council
-  roster: string | null;              // roster preset name; defaults to 'default'
+  roster: string | null;              // roster preset name ('default'|'frontier'|'cheap'|'auto')
+  autoThresholdTokens: number;        // size cutoff (tokens) for --roster auto
 }
 
 function parseArgs(): Args {
@@ -108,6 +109,12 @@ Options:
                                         Best results; runs on every plan)
                                cheap    (5 free + 5 cheap paid, ~$0.25/run, tuned for
                                         bulk / low-stakes throughput)
+                               auto     (stakes-adaptive — picks cheap vs frontier PER
+                                        plan by size: small plans get cheap, substantial
+                                        ones get frontier. A 'criticality: low|high'
+                                        frontmatter field overrides the size heuristic.)
+  --auto-threshold-tokens N  Size cutoff for --roster auto (default: ${AUTO_THRESHOLD_TOKENS}).
+                             Plans estimated at ≥ N tokens get the frontier council.
   --help                     Show this help
 `);
     process.exit(0);
@@ -150,6 +157,7 @@ Options:
     outputPath: getStr("--output-path"),
     excludeModels: getStrArray("--exclude-model"),
     roster: getStr("--roster"),
+    autoThresholdTokens: Math.floor(getNum("--auto-threshold-tokens", AUTO_THRESHOLD_TOKENS)),
   };
 }
 
@@ -588,6 +596,33 @@ async function reviewPlan(
   return { skipped: false, reviewPath: outputPath };
 }
 
+// Resolve a roster preset name + exclusions into the active council, or an error string.
+// `strictExclude` is true for an explicit --roster (a typo'd --exclude-model is an error);
+// false under --roster auto, where the same exclude flag is applied across cheap/default,
+// which legitimately have different members — so a non-matching exclude is just a no-op.
+function buildCouncil(
+  rosterName: string,
+  excludeSet: Set<string>,
+  minSuccessful: number,
+  strictExclude: boolean
+): { models: ModelInfo[]; error?: string } {
+  const roster = ROSTERS[rosterName];
+  if (!roster) {
+    return { models: [], error: `--roster value '${rosterName}' is not valid. Choose from: ${Object.keys(ROSTERS).join(", ")}, auto` };
+  }
+  const models = roster.filter((m) => !excludeSet.has(m.id));
+  if (strictExclude && excludeSet.size > 0) {
+    const missing = [...excludeSet].filter((id) => !roster.some((m) => m.id === id));
+    if (missing.length > 0) {
+      return { models, error: `--exclude-model value(s) not in '${rosterName}' roster: ${missing.join(", ")}\nValid IDs: ${roster.map((m) => m.id).join(", ")}` };
+    }
+  }
+  if (models.length < minSuccessful) {
+    return { models, error: `only ${models.length} models remain after --exclude-model, but --min-successful-models=${minSuccessful}. Raise the flag or exclude fewer models.` };
+  }
+  return { models };
+}
+
 // --- Main ---
 
 async function main(): Promise<number> {
@@ -616,37 +651,29 @@ async function main(): Promise<number> {
     : null;
 
   // Select roster. `default`/`frontier` = quality-optimized (runs on every plan);
-  // `cheap` = cost-optimized for bulk / low-stakes throughput.
-  const rosterName = args.roster ?? "default";
-  const selectedRoster = ROSTERS[rosterName];
-  if (!selectedRoster) {
-    console.error(`Error: --roster value '${rosterName}' is not valid. Choose from: ${Object.keys(ROSTERS).join(", ")}`);
-    process.exit(1);
-  }
-  if (rosterName !== "default") {
-    console.log(`Using '${rosterName}' roster (${selectedRoster.length} models)`);
+  // `cheap` = cost-optimized; `auto` = stakes-adaptive (resolved PER plan in the loop).
+  const requestedRoster = args.roster ?? "default";
+  const isAutoRoster = requestedRoster === "auto";
+  const excludeSet = new Set(args.excludeModels);
+  if (excludeSet.size > 0) {
+    console.log(`Excluding ${excludeSet.size} model(s) from council: ${[...excludeSet].join(", ")}`);
   }
 
-  // Filter the selected roster by --exclude-model. Validates against the SELECTED
-  // roster (not the default) so exclusions + roster choice compose cleanly.
-  const excludeSet = new Set(args.excludeModels);
-  const activeCouncilModels = selectedRoster.filter((m) => !excludeSet.has(m.id));
-  if (excludeSet.size > 0) {
-    const excluded = [...excludeSet];
-    const missing = excluded.filter((id) => !selectedRoster.some((m) => m.id === id));
-    if (missing.length > 0) {
-      console.error(`Error: --exclude-model value(s) not in '${rosterName}' roster: ${missing.join(", ")}`);
-      console.error(`Valid IDs for this roster: ${selectedRoster.map((m) => m.id).join(", ")}`);
+  // For a fixed roster, resolve + validate once up front. For `auto`, defer to the loop
+  // (each plan is sized independently).
+  let staticCouncil: ModelInfo[] | null = null;
+  if (isAutoRoster) {
+    console.log(`Auto-roster: picking cheap vs frontier per plan (threshold ~${args.autoThresholdTokens} tokens; 'criticality:' frontmatter overrides).`);
+  } else {
+    const built = buildCouncil(requestedRoster, excludeSet, args.minSuccessfulModels, true);
+    if (built.error) {
+      console.error(`Error: ${built.error}`);
       process.exit(1);
     }
-    console.log(`Excluding ${excluded.length} model(s) from council: ${excluded.join(", ")}`);
-  }
-  if (activeCouncilModels.length < args.minSuccessfulModels) {
-    console.error(
-      `Error: only ${activeCouncilModels.length} models remain after --exclude-model, ` +
-      `but --min-successful-models=${args.minSuccessfulModels}. Raise the flag or exclude fewer models.`
-    );
-    process.exit(1);
+    staticCouncil = built.models;
+    if (requestedRoster !== "default") {
+      console.log(`Using '${requestedRoster}' roster (${staticCouncil.length} models)`);
+    }
   }
 
   // --output-path only makes sense for single-file input.
@@ -689,6 +716,20 @@ async function main(): Promise<number> {
     const relPath = path.relative(process.cwd(), planPath);
     console.log(`\n▸ ${relPath}`);
 
+    // Resolve the council for THIS plan: fixed roster, or stakes-adaptive under `auto`.
+    let councilForPlan = staticCouncil;
+    if (isAutoRoster) {
+      const pick = resolveAutoRoster(fs.readFileSync(planPath, "utf-8"), args.autoThresholdTokens);
+      const built = buildCouncil(pick.roster, excludeSet, args.minSuccessfulModels, false);
+      if (built.error) {
+        console.log(`  ✗ Failed: ${built.error}`);
+        failed++;
+        continue;
+      }
+      councilForPlan = built.models;
+      console.log(`  Auto-roster: ${pick.roster} (${pick.reason})`);
+    }
+
     try {
       const result = await reviewPlan(
         planPath,
@@ -698,7 +739,7 @@ async function main(): Promise<number> {
         anthropicKey,
         reviewPromptOverride,
         synthesisPromptOverride,
-        activeCouncilModels,
+        councilForPlan!,
       );
       if (result.error) {
         console.log(`  ✗ Failed: ${result.error}`);

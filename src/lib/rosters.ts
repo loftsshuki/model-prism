@@ -64,3 +64,40 @@ export const ROSTERS: Record<string, ModelInfo[]> = {
   frontier: FRONTIER_COUNCIL,
   cheap: CHEAP_COUNCIL,
 };
+
+// --- Stakes-adaptive roster selection (`--roster auto`) ---
+//
+// Don't pay frontier prices to review a two-paragraph plan; do bring the frontier council
+// for a 2,000-line architecture spec. `auto` picks `cheap` vs `default` per plan by size,
+// with a `criticality:` frontmatter flag as an explicit override. `default` stays frontier,
+// so nothing downgrades silently unless the caller opts into `auto`.
+
+// Plans at or above this estimated token size get the frontier council; smaller ones get cheap.
+export const AUTO_THRESHOLD_TOKENS = 1200;
+
+// Rough token estimate (≈4 chars/token). Good enough to separate trivial from substantial.
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+// Read an optional `criticality: low|medium|high` from the plan's leading YAML frontmatter.
+export function readCriticality(planContent: string): "low" | "medium" | "high" | null {
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(planContent);
+  if (!fm) return null;
+  const m = /^criticality:\s*(low|medium|high)\s*$/im.exec(fm[1]);
+  return m ? (m[1].toLowerCase() as "low" | "medium" | "high") : null;
+}
+
+// Resolve which roster `auto` should use for a plan. Criticality wins; otherwise size decides.
+export function resolveAutoRoster(
+  planContent: string,
+  thresholdTokens: number = AUTO_THRESHOLD_TOKENS
+): { roster: "cheap" | "default"; reason: string } {
+  const crit = readCriticality(planContent);
+  if (crit === "high") return { roster: "default", reason: "criticality: high" };
+  if (crit === "low") return { roster: "cheap", reason: "criticality: low" };
+  const tokens = estimateTokens(planContent);
+  return tokens >= thresholdTokens
+    ? { roster: "default", reason: `~${tokens} tokens ≥ ${thresholdTokens}` }
+    : { roster: "cheap", reason: `~${tokens} tokens < ${thresholdTokens}` };
+}
