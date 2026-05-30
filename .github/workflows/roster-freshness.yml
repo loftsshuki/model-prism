@@ -24,15 +24,16 @@ jobs:
         with:
           bun-version: latest
 
-      - run: bun install --frozen-lockfile
-
+      # No `bun install` on purpose: the checker is dependency-free — it imports only
+      # node:fs and local TS (src/lib/rosters.ts → src/lib/types.ts) and uses the built-in
+      # fetch. Keep it that way so this job stays fast and immune to lockfile drift.
       - name: Check roster freshness
         id: check
         run: bun scripts/check-roster-freshness.ts --out roster-freshness-report.md
 
       - name: Publish report to run summary
         if: always()
-        run: cat roster-freshness-report.md >> "$GITHUB_STEP_SUMMARY"
+        run: cat roster-freshness-report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "No report generated (catalog fetch failed?)." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Open or update rolling issue
         if: ${{ steps.check.outputs.findings != '0' && steps.check.outputs.findings != '' }}
