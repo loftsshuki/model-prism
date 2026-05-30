@@ -118,10 +118,15 @@ export async function synthesizeDirect(
   content: string,
   analysisPrompt: string,
   responses: Array<{ model: string; modelName: string; family: string; response: string }>,
-  context?: string
+  context?: string,
+  customSynthesisInstructions?: string | null
 ): Promise<SynthesisResult> {
-  const modelId = synthesisModel === "opus" ? "claude-opus-4-6" : "claude-sonnet-4-6";
-  const prompt = buildSynthesisPrompt(content, analysisPrompt, responses, context);
+  // Opus 4.8 is the current top-of-family (2026-05-30) and prices identically to
+  // 4.6/4.7 ($5/$25 per M) — a free quality upgrade for the synthesis step. Kept
+  // a constant rather than hardcoded literal downstream so the "opus"/"sonnet"
+  // dispatch at callsites still reads cleanly.
+  const modelId = synthesisModel === "opus" ? "claude-opus-4-8" : "claude-sonnet-4-6";
+  const prompt = buildSynthesisPrompt(content, analysisPrompt, responses, context, customSynthesisInstructions);
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -162,7 +167,8 @@ export function buildSynthesisPrompt(
   content: string,
   analysisPrompt: string,
   responses: Array<{ model: string; modelName: string; family: string; response: string }>,
-  context?: string
+  context?: string,
+  customSynthesisInstructions?: string | null
 ): string {
   const truncatedContent = content.length > 4000 ? content.slice(0, 4000) + "..." : content;
 
@@ -184,6 +190,25 @@ ${context}
 `
     : "";
 
+  const defaultSynthesisBody = `Your primary job is to produce a MASTER DOCUMENT — a single, definitive, actionable synthesis that is better than any individual response. This is not a summary. It is the best possible version of the analysis, cherry-picking the strongest insights from every model and weaving them into one coherent document.
+
+Rules for the masterDocument:
+- Write it as if YOU are the expert delivering the analysis — don't say "Model X said..."
+- Incorporate the best points from ALL responses, not just the first few
+- If only one model caught something important, include it — that's the whole point of running many models
+- Use markdown: ## headers for sections, **bold** for key points, bullet lists for actionable items
+- Be thorough — this should be significantly longer and more useful than any single model's response
+- End with a prioritized action list
+
+For consensus/disagreements/uniqueInsights: weight by distinct base architecture — 3 Llama variants agreeing = 1 vote, not 3.
+
+For themeMatrix: identify 4-8 major themes, score every model 0-3 on coverage depth. Use model display names as keys.`;
+
+  // Custom synthesis instructions (e.g. second-pass code review) replace the default
+  // masterDocument framework but keep the same SynthesisResult schema, since the output
+  // shape is fixed by the Anthropic tool-use schema and downstream consumers expect it.
+  const synthesisBody = customSynthesisInstructions?.trim() || defaultSynthesisBody;
+
   return `You have ${responses.length} AI model responses (across ${families.length} distinct architectures: ${families.join(", ")}) to the same analysis prompt.
 
 ${contextBlock}<original_content>
@@ -198,17 +223,5 @@ ${analysisPrompt}
 ${responsesXml}
 </responses>
 
-Your primary job is to produce a MASTER DOCUMENT — a single, definitive, actionable synthesis that is better than any individual response. This is not a summary. It is the best possible version of the analysis, cherry-picking the strongest insights from every model and weaving them into one coherent document.
-
-Rules for the masterDocument:
-- Write it as if YOU are the expert delivering the analysis — don't say "Model X said..."
-- Incorporate the best points from ALL responses, not just the first few
-- If only one model caught something important, include it — that's the whole point of running many models
-- Use markdown: ## headers for sections, **bold** for key points, bullet lists for actionable items
-- Be thorough — this should be significantly longer and more useful than any single model's response
-- End with a prioritized action list
-
-For consensus/disagreements/uniqueInsights: weight by distinct base architecture — 3 Llama variants agreeing = 1 vote, not 3.
-
-For themeMatrix: identify 4-8 major themes, score every model 0-3 on coverage depth. Use model display names as keys.`;
+${synthesisBody}`;
 }

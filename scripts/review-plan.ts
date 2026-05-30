@@ -27,29 +27,61 @@ import {
 } from "../src/lib/local-context";
 import { ModelInfo, ModelResponse, SynthesisResult } from "../src/lib/types";
 
-// --- The 10-model council ---
+// --- Council rosters ---
+//
+// `default` / `frontier` → quality-optimized; runs on EVERY plan via the
+//        plan-review-cycle hook. 3 free diversity anchors + 7 frontier reasoning
+//        models, one per distinct family. Best results: strong independent reasoners
+//        catch subtle flaws the cheap/free models miss. ~$1–2/run incl. Opus 4.8
+//        synthesis — negligible vs the cost of an agent executing a flawed plan.
+// `cheap`  → cost-optimized for bulk / low-stakes runs. 5 free + 5 cheap paid,
+//        ~$0.25/run. Opt in with `--roster cheap`.
+//
+// All model IDs curl-verified against the live OpenRouter catalog on 2026-05-30.
+// `:free` slots are cushioned by the auto-fallback (src/lib/fan-out.ts): a free slot
+// that 429/503s mid-run auto-swaps to its paid twin (or a cheap generalist), so a
+// flaky free endpoint never drops the council below quorum.
+//
+// Roster history: the prior "11 families" refresh (2026-05-03) shipped 3 broken IDs
+// (tencent/hy3-preview:free + nvidia/nemotron-nano-12b-v2:free were absent from the
+// catalog; openrouter/owl-alpha is a volatile cloaked alpha; anthropic/claude-haiku-4-5
+// used a hyphen where the catalog wants a dot). All corrected here.
 
-// 10-model council: 5 proven-reliable free + 5 cheap paid for guaranteed coverage.
-// Free tier has account-wide daily quotas — 5 free is the practical ceiling we can
-// count on. The 5 paid slots (all sub-cent) ensure we always hit 10/10 responses.
-// Total cost per plan: ~$0.05 for the 5 paid calls + ~$0.10 for Opus synthesis.
-// Refreshed 2026-05-03 — swapped to current OpenRouter catalog. 11 distinct
-// families across paid+free for adversarial diversity.
-const COUNCIL_MODELS: ModelInfo[] = [
-  // --- 6 reliable free models (refreshed 2026-05-03; 6 distinct families) ---
+const FRONTIER_COUNCIL: ModelInfo[] = [
+  // --- 3 free diversity anchors (distinct strong families, $0) ---
   { id: "openai/gpt-oss-120b:free", name: "GPT-OSS 120B", family: "gpt-oss", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
-  { id: "qwen/qwen3-coder:free", name: "Qwen3 Coder", family: "qwen", tier: "free", contextLength: 262000, inputCostPer1k: 0, outputCostPer1k: 0 },
-  { id: "nvidia/nemotron-3-super-120b-a12b:free", name: "Nemotron 3 Super 120B", family: "nemotron", tier: "free", contextLength: 262144, inputCostPer1k: 0, outputCostPer1k: 0 },
-  { id: "tencent/hy3-preview:free", name: "Tencent HY3", family: "tencent", tier: "free", contextLength: 262144, inputCostPer1k: 0, outputCostPer1k: 0 },
+  { id: "nvidia/nemotron-3-super-120b-a12b:free", name: "Nemotron 3 Super 120B", family: "nemotron", tier: "free", contextLength: 1000000, inputCostPer1k: 0, outputCostPer1k: 0 },
+  { id: "z-ai/glm-4.5-air:free", name: "GLM 4.5 Air", family: "glm", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
+  // --- 7 paid frontier/reasoning slots, one per distinct family ---
+  { id: "anthropic/claude-haiku-4.5", name: "Claude Haiku 4.5", family: "claude", tier: "fast", contextLength: 200000, inputCostPer1k: 0.001, outputCostPer1k: 0.005 },
+  { id: "openai/gpt-5.4", name: "GPT-5.4", family: "gpt-5", tier: "fast", contextLength: 1050000, inputCostPer1k: 0.0025, outputCostPer1k: 0.015 },
+  { id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro", family: "gemini", tier: "fast", contextLength: 1048576, inputCostPer1k: 0.00125, outputCostPer1k: 0.010 },
+  { id: "x-ai/grok-4.20-multi-agent", name: "Grok 4.20 Multi-Agent", family: "grok", tier: "fast", contextLength: 2000000, inputCostPer1k: 0.002, outputCostPer1k: 0.006 },
+  { id: "qwen/qwen3.6-plus", name: "Qwen 3.6 Plus", family: "qwen", tier: "fast", contextLength: 1000000, inputCostPer1k: 0.000325, outputCostPer1k: 0.00195 },
+  { id: "deepseek/deepseek-r1-0528", name: "DeepSeek R1", family: "deepseek-r1", tier: "fast", contextLength: 163840, inputCostPer1k: 0.0005, outputCostPer1k: 0.00215 },
+  { id: "moonshotai/kimi-k2-thinking", name: "Kimi K2 Thinking", family: "kimi", tier: "fast", contextLength: 262144, inputCostPer1k: 0.0006, outputCostPer1k: 0.0025 },
+];
+
+const CHEAP_COUNCIL: ModelInfo[] = [
+  // --- 5 reliable free models (distinct families; cushioned by auto-fallback) ---
+  { id: "openai/gpt-oss-120b:free", name: "GPT-OSS 120B", family: "gpt-oss", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
+  { id: "qwen/qwen3-coder:free", name: "Qwen3 Coder", family: "qwen", tier: "free", contextLength: 1048576, inputCostPer1k: 0, outputCostPer1k: 0 },
+  { id: "nvidia/nemotron-3-super-120b-a12b:free", name: "Nemotron 3 Super 120B", family: "nemotron", tier: "free", contextLength: 1000000, inputCostPer1k: 0, outputCostPer1k: 0 },
+  { id: "z-ai/glm-4.5-air:free", name: "GLM 4.5 Air", family: "glm", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
   { id: "nousresearch/hermes-3-llama-3.1-405b:free", name: "Hermes 3 405B", family: "hermes-llama", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
-  { id: "openrouter/owl-alpha", name: "Owl Alpha", family: "owl", tier: "free", contextLength: 1048756, inputCostPer1k: 0, outputCostPer1k: 0 },
-  // --- 5 cheap paid models (refreshed 2026-05-03; max family diversity) ---
-  { id: "anthropic/claude-haiku-4-5", name: "Claude Haiku 4.5", family: "claude", tier: "fast", contextLength: 200000, inputCostPer1k: 0.001, outputCostPer1k: 0.005 },
-  { id: "moonshotai/kimi-k2.6", name: "Kimi K2.6", family: "kimi", tier: "fast", contextLength: 262142, inputCostPer1k: 0.00074, outputCostPer1k: 0.00349 },
+  // --- 5 cheap paid models (distinct families; all curl-verified 2026-05-30) ---
+  { id: "anthropic/claude-haiku-4.5", name: "Claude Haiku 4.5", family: "claude", tier: "fast", contextLength: 200000, inputCostPer1k: 0.001, outputCostPer1k: 0.005 },
   { id: "google/gemini-2.5-flash", name: "Gemini 2.5 Flash", family: "gemini", tier: "fast", contextLength: 1048576, inputCostPer1k: 0.0003, outputCostPer1k: 0.0025 },
   { id: "deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro", family: "deepseek", tier: "fast", contextLength: 1048576, inputCostPer1k: 0.000435, outputCostPer1k: 0.00087 },
   { id: "x-ai/grok-4.3", name: "Grok 4.3", family: "grok", tier: "fast", contextLength: 1000000, inputCostPer1k: 0.00125, outputCostPer1k: 0.0025 },
+  { id: "moonshotai/kimi-k2.6", name: "Kimi K2.6", family: "kimi", tier: "fast", contextLength: 262144, inputCostPer1k: 0.000684, outputCostPer1k: 0.00342 },
 ];
+
+const ROSTERS: Record<string, ModelInfo[]> = {
+  default: FRONTIER_COUNCIL,
+  frontier: FRONTIER_COUNCIL,
+  cheap: CHEAP_COUNCIL,
+};
 
 // --- The review prompt ---
 
@@ -86,6 +118,12 @@ interface Args {
   maxCostPerPlan: number;
   minSuccessfulModels: number;
   enhance: boolean;
+  // Second-pass / custom-review support:
+  reviewPromptPath: string | null;    // override fan-out REVIEW_PROMPT
+  synthesisPromptPath: string | null; // override Opus synthesis trailing instructions
+  outputPath: string | null;          // explicit output path; bypasses getReviewPath()
+  excludeModels: string[];            // repeatable: model IDs to drop from council
+  roster: string | null;              // roster preset name; defaults to 'default'
 }
 
 function parseArgs(): Args {
@@ -104,6 +142,24 @@ Options:
   --max-cost-per-plan N      Per-plan circuit breaker (default: 1.00)
   --min-successful-models N  Require N successful responses before synthesis (default: 6)
   --no-enhance               Skip AI brief enhancement (use template only)
+  --review-prompt <path>     Use a custom prompt for the 10-model fan-out instead of
+                             the built-in plan-review prompt (also re-labels output
+                             as a "Second-Pass Review" rather than "Plan Review")
+  --synthesis-prompt <path>  Use a custom trailing instruction for the Opus synthesis
+                             step instead of the built-in masterDocument framework
+  --output-path <path>       Write the review to this exact path instead of the
+                             auto-derived <dir>/reviews/<name>.review.md
+  --exclude-model <id>       Drop a council model by ID (repeatable). Useful on
+                             second-pass to drop the primary reviewer's model family
+                             for maximum divergence (e.g. --exclude-model anthropic/claude-haiku-4.5)
+  --roster <name>            Select a council preset. Options:
+                               default / frontier (the DEFAULT — 3 free anchors +
+                                        7 frontier reasoning models: Haiku 4.5,
+                                        GPT-5.4, Gemini 2.5 Pro, Grok 4.20, Qwen 3.6
+                                        Plus, DeepSeek R1, Kimi K2 Thinking. ~$1-2/run.
+                                        Best results; runs on every plan)
+                               cheap    (5 free + 5 cheap paid, ~$0.25/run, tuned for
+                                        bulk / low-stakes throughput)
   --help                     Show this help
 `);
     process.exit(0);
@@ -116,6 +172,22 @@ Options:
     return Number.isFinite(parsed) ? parsed : def;
   };
 
+  const getStr = (flag: string): string | null => {
+    const idx = argv.indexOf(flag);
+    if (idx === -1 || idx + 1 >= argv.length) return null;
+    return argv[idx + 1];
+  };
+
+  const getStrArray = (flag: string): string[] => {
+    const values: string[] = [];
+    for (let i = 0; i < argv.length; i++) {
+      if (argv[i] === flag && i + 1 < argv.length) {
+        values.push(argv[i + 1]);
+      }
+    }
+    return values;
+  };
+
   return {
     target: argv[0],
     batch: argv.includes("--batch"),
@@ -125,7 +197,28 @@ Options:
     maxCostPerPlan: getNum("--max-cost-per-plan", 1.0),
     minSuccessfulModels: Math.floor(getNum("--min-successful-models", 6)),
     enhance: !argv.includes("--no-enhance"),
+    reviewPromptPath: getStr("--review-prompt"),
+    synthesisPromptPath: getStr("--synthesis-prompt"),
+    outputPath: getStr("--output-path"),
+    excludeModels: getStrArray("--exclude-model"),
+    roster: getStr("--roster"),
   };
+}
+
+// --- Prompt file loader ---
+
+function loadPromptFile(promptPath: string, label: string): string {
+  const resolved = path.resolve(promptPath);
+  if (!fs.existsSync(resolved)) {
+    console.error(`Error: ${label} file not found: ${resolved}`);
+    process.exit(1);
+  }
+  const content = fs.readFileSync(resolved, "utf-8").trim();
+  if (!content) {
+    console.error(`Error: ${label} file is empty: ${resolved}`);
+    process.exit(1);
+  }
+  return content;
 }
 
 // --- Find plans to review ---
@@ -208,13 +301,18 @@ interface ReviewData {
   contextBrief: string;
   synthesis: SynthesisResult;
   modelResponses: ModelResponse[];
+  usedModels: ModelInfo[];
   totalInputTokens: number;
   totalOutputTokens: number;
   durationSec: number;
+  outputPathOverride: string | null;
+  customReviewMode: boolean;
 }
 
 function writeReviewFile(data: ReviewData): string {
-  const reviewPath = getReviewPath(data.planPath);
+  const reviewPath = data.outputPathOverride
+    ? path.resolve(data.outputPathOverride)
+    : getReviewPath(data.planPath);
   const reviewDir = path.dirname(reviewPath);
   if (!fs.existsSync(reviewDir)) {
     fs.mkdirSync(reviewDir, { recursive: true });
@@ -223,15 +321,24 @@ function writeReviewFile(data: ReviewData): string {
   const planName = path.basename(data.planPath, ".md");
   const successfulModels = data.modelResponses.filter((r) => r.status === "complete");
   const failedModels = data.modelResponses.filter((r) => r.status === "error");
+  // Look up model family from the roster that was actually used for THIS run
+  // (not a hardcoded constant, since --roster can switch which 10 models ran).
+  const rosterLookup = data.usedModels;
+
+  // In custom-review mode (--review-prompt), use neutral frontmatter + title so the
+  // output doesn't falsely assert it reviewed a "plan" when the input was e.g. a
+  // findings log or audit doc.
+  const sourceKey = data.customReviewMode ? "reviewed-doc" : "plan";
+  const title = data.customReviewMode ? "Second-Pass Review" : "Plan Review";
 
   const frontmatter = `---
-plan: ${path.basename(data.planPath)}
+${sourceKey}: ${path.basename(data.planPath)}
 reviewed-at: ${new Date().toISOString()}
 content-hash: ${data.contentHash}
 context-repo: ${data.contextRepo}
 models-succeeded: ${successfulModels.length}
 models-failed: ${failedModels.length}
-synthesis-model: claude-opus-4-6
+synthesis-model: claude-opus-4-8
 total-input-tokens: ${data.totalInputTokens}
 total-output-tokens: ${data.totalOutputTokens}
 duration-sec: ${data.durationSec}
@@ -240,10 +347,10 @@ duration-sec: ${data.durationSec}
 `;
 
   const lines: string[] = [frontmatter];
-  lines.push(`# Plan Review: ${planName}`);
+  lines.push(`# ${title}: ${planName}`);
   lines.push("");
   lines.push(`Reviewed by ${successfulModels.length} models across ${new Set(successfulModels.map((r) => {
-    const info = COUNCIL_MODELS.find((m) => m.id === r.model);
+    const info = rosterLookup.find((m) => m.id === r.model);
     return info?.family ?? "unknown";
   })).size} architectures, synthesized with Claude Opus.`);
   lines.push("");
@@ -348,11 +455,18 @@ async function reviewPlan(
   context: LocalContext,
   args: Args,
   openrouterKey: string,
-  anthropicKey: string
+  anthropicKey: string,
+  reviewPromptOverride: string | null,
+  synthesisPromptOverride: string | null,
+  activeCouncilModels: ModelInfo[]
 ): Promise<{ skipped: boolean; skipReason?: "already-reviewed" | "dry-run"; reviewPath?: string; error?: string }> {
   const planContent = fs.readFileSync(planPath, "utf-8");
   const contentHash = hashContent(planContent);
-  const reviewPath = getReviewPath(planPath);
+  // In --output-path mode the cache-hash check reads the explicit output;
+  // otherwise it reads the conventional <dir>/reviews/<name>.review.md.
+  const reviewPath = args.outputPath
+    ? path.resolve(args.outputPath)
+    : getReviewPath(planPath);
 
   // Check existing
   if (!args.force) {
@@ -399,16 +513,19 @@ async function reviewPlan(
   const contextString = baseContext + referencedSection;
   const planName = path.basename(planPath);
 
-  const _free = COUNCIL_MODELS.filter((m) => m.tier === "free").length;
-  const _paid = COUNCIL_MODELS.length - _free;
-  console.log(`  Fanning out to ${COUNCIL_MODELS.length} council models (${_free} free + ${_paid} paid)...`);
+  // Use custom review prompt if provided, otherwise built-in plan-review prompt.
+  const effectiveReviewPrompt = reviewPromptOverride ?? REVIEW_PROMPT;
+
+  const freeCount = activeCouncilModels.filter((m) => m.tier === "free").length;
+  const paidCount = activeCouncilModels.length - freeCount;
+  console.log(`  Fanning out to ${activeCouncilModels.length} council models (${freeCount} free + ${paidCount} paid)...`);
   const startTime = Date.now();
 
   let completedCount = 0;
   const responses = await fanOut({
-    models: COUNCIL_MODELS,
+    models: activeCouncilModels,
     content: planContent,
-    prompt: REVIEW_PROMPT,
+    prompt: effectiveReviewPrompt,
     apiKey: openrouterKey,
     runId: null,
     maxTokens: 4096,
@@ -417,12 +534,12 @@ async function reviewPlan(
     onUpdate: (modelId, resp) => {
       if (resp.status === "complete" || resp.status === "error") {
         completedCount++;
-        const info = COUNCIL_MODELS.find((m) => m.id === modelId);
+        const info = activeCouncilModels.find((m) => m.id === modelId);
         const symbol = resp.status === "complete" ? "✓" : "✗";
         const suffix = resp.status === "error" && resp.error
           ? `  [${resp.error.slice(0, 80)}]`
           : "";
-        process.stdout.write(`    ${symbol} ${info?.name ?? modelId} (${completedCount}/${COUNCIL_MODELS.length})${suffix}\n`);
+        process.stdout.write(`    ${symbol} ${info?.name ?? modelId} (${completedCount}/${activeCouncilModels.length})${suffix}\n`);
       }
     },
   });
@@ -431,7 +548,7 @@ async function reviewPlan(
   if (successful.length < args.minSuccessfulModels) {
     return {
       skipped: false,
-      error: `Only ${successful.length}/${COUNCIL_MODELS.length} models succeeded — need ≥${args.minSuccessfulModels} for reliable synthesis (configure via --min-successful-models)`,
+      error: `Only ${successful.length}/${activeCouncilModels.length} models succeeded — need ≥${args.minSuccessfulModels} for reliable synthesis (configure via --min-successful-models)`,
     };
   }
 
@@ -453,7 +570,7 @@ async function reviewPlan(
 
   console.log(`  Synthesizing with Claude Opus... (estimated cost: $${estimatedSynthesisCost.toFixed(3)})`);
   const synthesisResponses = successful.map((r) => {
-    const info = COUNCIL_MODELS.find((m) => m.id === r.model);
+    const info = activeCouncilModels.find((m) => m.id === r.model);
     return {
       model: r.model,
       modelName: r.modelName,
@@ -466,9 +583,10 @@ async function reviewPlan(
     anthropicKey,
     "opus",
     planContent,
-    REVIEW_PROMPT,
+    effectiveReviewPrompt,
     synthesisResponses,
-    contextString
+    contextString,
+    synthesisPromptOverride
   );
 
   const durationSec = Math.round((Date.now() - startTime) / 1000);
@@ -483,9 +601,12 @@ async function reviewPlan(
     contextBrief: context.brief,
     synthesis,
     modelResponses: responses,
+    usedModels: activeCouncilModels,
     totalInputTokens,
     totalOutputTokens,
     durationSec,
+    outputPathOverride: args.outputPath,
+    customReviewMode: reviewPromptOverride !== null,
   });
 
   return { skipped: false, reviewPath: outputPath };
@@ -493,7 +614,7 @@ async function reviewPlan(
 
 // --- Main ---
 
-async function main() {
+async function main(): Promise<number> {
   const args = parseArgs();
 
   const openrouterKey = process.env.OPENROUTER_API_KEY || "";
@@ -510,12 +631,60 @@ async function main() {
     }
   }
 
+  // Load custom prompt files if provided.
+  const reviewPromptOverride = args.reviewPromptPath
+    ? loadPromptFile(args.reviewPromptPath, "review-prompt")
+    : null;
+  const synthesisPromptOverride = args.synthesisPromptPath
+    ? loadPromptFile(args.synthesisPromptPath, "synthesis-prompt")
+    : null;
+
+  // Select roster. `default`/`frontier` = quality-optimized (runs on every plan);
+  // `cheap` = cost-optimized for bulk / low-stakes throughput.
+  const rosterName = args.roster ?? "default";
+  const selectedRoster = ROSTERS[rosterName];
+  if (!selectedRoster) {
+    console.error(`Error: --roster value '${rosterName}' is not valid. Choose from: ${Object.keys(ROSTERS).join(", ")}`);
+    process.exit(1);
+  }
+  if (rosterName !== "default") {
+    console.log(`Using '${rosterName}' roster (${selectedRoster.length} models)`);
+  }
+
+  // Filter the selected roster by --exclude-model. Validates against the SELECTED
+  // roster (not the default) so exclusions + roster choice compose cleanly.
+  const excludeSet = new Set(args.excludeModels);
+  const activeCouncilModels = selectedRoster.filter((m) => !excludeSet.has(m.id));
+  if (excludeSet.size > 0) {
+    const excluded = [...excludeSet];
+    const missing = excluded.filter((id) => !selectedRoster.some((m) => m.id === id));
+    if (missing.length > 0) {
+      console.error(`Error: --exclude-model value(s) not in '${rosterName}' roster: ${missing.join(", ")}`);
+      console.error(`Valid IDs for this roster: ${selectedRoster.map((m) => m.id).join(", ")}`);
+      process.exit(1);
+    }
+    console.log(`Excluding ${excluded.length} model(s) from council: ${excluded.join(", ")}`);
+  }
+  if (activeCouncilModels.length < args.minSuccessfulModels) {
+    console.error(
+      `Error: only ${activeCouncilModels.length} models remain after --exclude-model, ` +
+      `but --min-successful-models=${args.minSuccessfulModels}. Raise the flag or exclude fewer models.`
+    );
+    process.exit(1);
+  }
+
+  // --output-path only makes sense for single-file input.
+  if (args.outputPath && args.batch) {
+    console.error("Error: --output-path is incompatible with --batch (ambiguous destination).");
+    process.exit(1);
+  }
+
   const plans = findPlans(args.target, args.batch);
   console.log(`\nFound ${plans.length} plan${plans.length !== 1 ? "s" : ""} to review\n`);
 
   if (plans.length === 0) {
     console.log("Nothing to do.");
-    return;
+    return 0;
   }
 
   // Build context once (all plans presumably share the same repo)
@@ -545,7 +714,16 @@ async function main() {
     console.log(`\n▸ ${relPath}`);
 
     try {
-      const result = await reviewPlan(planPath, context, args, openrouterKey, anthropicKey);
+      const result = await reviewPlan(
+        planPath,
+        context,
+        args,
+        openrouterKey,
+        anthropicKey,
+        reviewPromptOverride,
+        synthesisPromptOverride,
+        activeCouncilModels,
+      );
       if (result.error) {
         console.log(`  ✗ Failed: ${result.error}`);
         failed++;
@@ -567,9 +745,13 @@ async function main() {
 
   console.log(`\n${"─".repeat(50)}`);
   console.log(`Done: ${reviewed} reviewed, ${skipped} skipped, ${failed} failed`);
+
+  return failed > 0 ? 1 : 0;
 }
 
-main().catch((err) => {
+main().then((exitCode) => {
+  process.exit(exitCode);
+}).catch((err) => {
   console.error("Fatal error:", err);
   process.exit(1);
 });
