@@ -12,8 +12,9 @@ function sleep(ms: number) {
 // suffers provider outages (503 "no healthy upstream"). When a free model exhausts
 // its retries, swap in a reliable substitute so the council slot isn't lost.
 // Preference: the SAME model's paid variant (identical voice, reliable provider);
-// otherwise a cheap reliable generalist. All IDs verified against the OpenRouter
-// catalog 2026-05-29. Costs are per-1k tokens.
+// otherwise a cheap reliable generalist. All IDs + prices curl-verified against the
+// OpenRouter catalog 2026-05-30. Costs are per-1k tokens. Keep this map in sync with
+// the `:free` slots of the rosters in scripts/review-plan.ts.
 interface FallbackTarget {
   id: string;
   name: string;
@@ -22,9 +23,16 @@ interface FallbackTarget {
 }
 
 const FALLBACK_MAP: Record<string, FallbackTarget> = {
-  // GPT-OSS free endpoints 503 frequently → their paid variants (same model).
+  // Each free slot → its OWN paid endpoint (identical model voice, reliable provider).
+  // GPT-OSS free endpoints 503 frequently.
   "openai/gpt-oss-120b:free": { id: "openai/gpt-oss-120b", name: "GPT-OSS 120B (paid)", inputCostPer1k: 0.00009, outputCostPer1k: 0.00045 },
   "openai/gpt-oss-20b:free": { id: "openai/gpt-oss-20b", name: "GPT-OSS 20B (paid)", inputCostPer1k: 0.00004, outputCostPer1k: 0.00015 },
+  // Default (frontier) roster free anchors:
+  "nvidia/nemotron-3-super-120b-a12b:free": { id: "nvidia/nemotron-3-super-120b-a12b", name: "Nemotron 3 Super 120B (paid)", inputCostPer1k: 0.00009, outputCostPer1k: 0.00045 },
+  "z-ai/glm-4.5-air:free": { id: "z-ai/glm-4.5-air", name: "GLM 4.5 Air (paid)", inputCostPer1k: 0.000125, outputCostPer1k: 0.00085 },
+  // Additional `cheap` roster free slots:
+  "qwen/qwen3-coder:free": { id: "qwen/qwen3-coder", name: "Qwen3 Coder (paid)", inputCostPer1k: 0.00022, outputCostPer1k: 0.0018 },
+  "nousresearch/hermes-3-llama-3.1-405b:free": { id: "nousresearch/hermes-3-llama-3.1-405b", name: "Hermes 3 405B (paid)", inputCostPer1k: 0.001, outputCostPer1k: 0.001 },
 };
 
 // Any other `:free` model with no specific mapping falls back to a cheap, reliable
