@@ -20,7 +20,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import { fanOut } from "../src/lib/fan-out";
-import { synthesizeDirect } from "../src/lib/synthesis";
+import { synthesizeDirect, SYNTHESIS_MODEL_IDS } from "../src/lib/synthesis";
 import {
   buildLocalContext, buildLocalContextString, findRepoRoot, LocalContext,
   detectPlanReferencedFiles, loadReferencedFiles, detectSemanticReferences,
@@ -343,7 +343,7 @@ content-hash: ${data.contentHash}
 context-repo: ${data.contextRepo}
 models-succeeded: ${successfulModels.length}
 models-failed: ${failedModels.length}
-synthesis-model: claude-opus-4-8
+synthesis-model: ${SYNTHESIS_MODEL_IDS.opus}
 total-input-tokens: ${data.totalInputTokens}
 total-output-tokens: ${data.totalOutputTokens}
 duration-sec: ${data.durationSec}
