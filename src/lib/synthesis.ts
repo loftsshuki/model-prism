@@ -128,39 +128,71 @@ export async function synthesizeDirect(
   const modelId = synthesisModel === "opus" ? "claude-opus-4-8" : "claude-sonnet-4-6";
   const prompt = buildSynthesisPrompt(content, analysisPrompt, responses, context, customSynthesisInstructions);
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": anthropicKey,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
-    body: JSON.stringify({
-      model: modelId,
-      max_tokens: 16384,
-      tools: [{
-        name: "synthesis",
-        description: "Output the structured synthesis result",
-        input_schema: SynthesisJsonSchema,
-      }],
-      tool_choice: { type: "tool", name: "synthesis" },
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
+  // Bounded retry for the synthesis call ONLY. The fan-out `responses` are already in
+  // hand, so a transient Opus failure (network drop, 429 rate-limit, 5xx) must NOT
+  // bubble up and trigger a full 10-model council re-run. Retry transient failures with
+  // exponential backoff; fast-fail on 400/401/403 (bad request / auth / billing) where
+  // a retry would only burn the same error 4×.
+  const MAX_ATTEMPTS = 4;
+  let lastError: Error | null = null;
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Anthropic error: ${res.status} ${err.slice(0, 200)}`);
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": anthropicKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+        body: JSON.stringify({
+          model: modelId,
+          max_tokens: 16384,
+          tools: [{
+            name: "synthesis",
+            description: "Output the structured synthesis result",
+            input_schema: SynthesisJsonSchema,
+          }],
+          tool_choice: { type: "tool", name: "synthesis" },
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.text();
+        // Non-retryable: malformed request, bad key, or no credits — fail fast.
+        if (res.status === 400 || res.status === 401 || res.status === 403) {
+          throw new Error(`Anthropic error (non-retryable): ${res.status} ${err.slice(0, 200)}`);
+        }
+        // Retryable (429 / 5xx / anything else transient).
+        throw new Error(`Anthropic error: ${res.status} ${err.slice(0, 200)}`);
+      }
+
+      const data = await res.json();
+      const toolBlock = data.content?.find((b: { type: string }) => b.type === "tool_use");
+      if (!toolBlock?.input) {
+        // Transient model hiccup (returned text instead of the tool call) — worth a retry.
+        throw new Error("No structured output returned from synthesis model");
+      }
+
+      return toolBlock.input as SynthesisResult;
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      // Fast-fail on non-retryable billing/auth/bad-request errors.
+      if (lastError.message.includes("(non-retryable)")) {
+        throw lastError;
+      }
+      if (attempt < MAX_ATTEMPTS) {
+        // Exponential backoff with jitter: ~1s, 2s, 4s.
+        const backoffMs = 1000 * 2 ** (attempt - 1) + Math.floor(Math.random() * 250);
+        console.error(`  Synthesis attempt ${attempt}/${MAX_ATTEMPTS} failed (${lastError.message.slice(0, 120)}); retrying in ${backoffMs}ms...`);
+        await new Promise((r) => setTimeout(r, backoffMs));
+      }
+    }
   }
 
-  const data = await res.json();
-  const toolBlock = data.content?.find((b: { type: string }) => b.type === "tool_use");
-  if (!toolBlock?.input) {
-    throw new Error("No structured output returned from synthesis model");
-  }
-
-  return toolBlock.input as SynthesisResult;
+  throw new Error(`Synthesis failed after ${MAX_ATTEMPTS} attempts: ${lastError?.message ?? "unknown error"}`);
 }
 
 export function buildSynthesisPrompt(
