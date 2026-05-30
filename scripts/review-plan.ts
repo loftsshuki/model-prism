@@ -29,6 +29,7 @@ import { ModelInfo, ModelResponse, SynthesisResult } from "../src/lib/types";
 // Council rosters live in their own module so the freshness checker
 // (scripts/check-roster-freshness.ts) reads the exact rosters that run here.
 import { ROSTERS } from "../src/lib/rosters";
+import { buildRunTelemetry, appendRunTelemetry } from "../src/lib/telemetry";
 
 // --- The review prompt ---
 
@@ -302,11 +303,58 @@ duration-sec: ${data.durationSec}
   })).size} architectures, synthesized with Claude Opus.`);
   lines.push("");
 
+  // ⚖️ DECISION REQUIRED — lead with where the council SPLIT. A council's value isn't the
+  // consensus (any one model gives you that) — it's the points strong models disagree on and
+  // what they collectively overlooked. That's the surface a human actually has to adjudicate,
+  // so it goes first, before the master synthesis.
+  const disagreements = data.synthesis.disagreements ?? [];
+  const blindSpots = data.synthesis.blindSpots ?? [];
+  lines.push("## ⚖️ Decision Required — where the council split");
+  lines.push("");
+  if (disagreements.length === 0 && blindSpots.length === 0) {
+    lines.push("_The council reached broad consensus — no contested points or blind spots flagged. Scan the synthesis below anyway._");
+    lines.push("");
+  } else {
+    lines.push("_The highest-signal part of the review: points strong models contest, and what they collectively missed. These need **your** call._");
+    lines.push("");
+  }
+  if (disagreements.length > 0) {
+    lines.push("### Contested points");
+    lines.push("");
+    for (const d of disagreements) {
+      lines.push(`#### ${d.topic}`);
+      for (const p of d.positions) {
+        lines.push(`- **${p.models.join(", ")}**: ${p.position}`);
+      }
+      lines.push("");
+    }
+  }
+  if (blindSpots.length > 0) {
+    lines.push("### Blind spots — what the council under-explored");
+    lines.push("");
+    for (const b of blindSpots) {
+      lines.push(`- ${b}`);
+    }
+    lines.push("");
+  }
+
   // Master document
   if (data.synthesis.masterDocument) {
     lines.push("## Master Synthesis");
     lines.push("");
     lines.push(data.synthesis.masterDocument);
+    lines.push("");
+  }
+
+  // Unique insights — the "gold" a single model surfaced that the rest missed.
+  if (data.synthesis.uniqueInsights?.length > 0) {
+    lines.push("## Unique Insights");
+    lines.push("");
+    lines.push("Valuable points raised by only 1-2 models:");
+    lines.push("");
+    for (const i of data.synthesis.uniqueInsights) {
+      lines.push(`- **[${i.significance}]** _(${i.model})_ ${i.insight}`);
+    }
     lines.push("");
   }
 
@@ -319,44 +367,6 @@ duration-sec: ${data.durationSec}
     for (const c of data.synthesis.consensus) {
       lines.push(`- **[${c.strength}]** ${c.point}`);
       lines.push(`  _Supported by: ${c.supportingModels.join(", ")}_`);
-    }
-    lines.push("");
-  }
-
-  // Unique insights
-  if (data.synthesis.uniqueInsights?.length > 0) {
-    lines.push("## Unique Insights");
-    lines.push("");
-    lines.push("Valuable points raised by only 1-2 models:");
-    lines.push("");
-    for (const i of data.synthesis.uniqueInsights) {
-      lines.push(`- **[${i.significance}]** _(${i.model})_ ${i.insight}`);
-    }
-    lines.push("");
-  }
-
-  // Disagreements
-  if (data.synthesis.disagreements?.length > 0) {
-    lines.push("## Disagreements");
-    lines.push("");
-    for (const d of data.synthesis.disagreements) {
-      lines.push(`### ${d.topic}`);
-      lines.push("");
-      for (const p of d.positions) {
-        lines.push(`- **${p.models.join(", ")}**: ${p.position}`);
-      }
-      lines.push("");
-    }
-  }
-
-  // Blind spots
-  if (data.synthesis.blindSpots?.length > 0) {
-    lines.push("## Blind Spots");
-    lines.push("");
-    lines.push("Aspects of the plan that most models ignored:");
-    lines.push("");
-    for (const b of data.synthesis.blindSpots) {
-      lines.push(`- ${b}`);
     }
     lines.push("");
   }
@@ -555,6 +565,25 @@ async function reviewPlan(
     outputPathOverride: args.outputPath,
     customReviewMode: reviewPromptOverride !== null,
   });
+
+  // Record per-model telemetry for the `model-value` report. Best-effort: a telemetry
+  // write must never fail a completed review.
+  try {
+    appendRunTelemetry(buildRunTelemetry({
+      ts: new Date().toISOString(),
+      plan: path.basename(planPath),
+      contentHash,
+      contextRepo: context.repoName,
+      roster: args.roster ?? "default",
+      synthesisModel: SYNTHESIS_MODEL_IDS.opus,
+      durationSec,
+      synthesis,
+      responses,
+      usedModels: activeCouncilModels,
+    }));
+  } catch (e) {
+    console.error(`  (telemetry not recorded: ${e instanceof Error ? e.message : e})`);
+  }
 
   return { skipped: false, reviewPath: outputPath };
 }
