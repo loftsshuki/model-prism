@@ -121,6 +121,17 @@ export const SYNTHESIS_MODEL_IDS: Record<"sonnet" | "opus", string> = {
   sonnet: "claude-sonnet-4-6",
 };
 
+// An Error tagged as non-retryable — a retry would only reproduce the same failure
+// (malformed request, bad key, exhausted credits), so the loop fails fast on it.
+type TaggedError = Error & { nonRetryable?: boolean };
+
+// A response body is non-retryable if it names a permanent condition, regardless of
+// the HTTP status that carried it (e.g. some "credit balance too low" come back 4xx).
+function isNonRetryableBody(body: string): boolean {
+  const b = body.toLowerCase();
+  return b.includes("credit balance") || b.includes("invalid_request") || b.includes("authentication");
+}
+
 // Call Anthropic directly from the browser — no Vercel timeout
 export async function synthesizeDirect(
   anthropicKey: string,
@@ -129,20 +140,25 @@ export async function synthesizeDirect(
   analysisPrompt: string,
   responses: Array<{ model: string; modelName: string; family: string; response: string }>,
   context?: string,
-  customSynthesisInstructions?: string | null
+  customSynthesisInstructions?: string | null,
+  // Retry tuning. Production defaults; the unit test passes a tiny baseDelayMs so it
+  // exercises the retry path without real-time backoff.
+  retryOptions?: { maxAttempts?: number; baseDelayMs?: number }
 ): Promise<SynthesisResult> {
   const modelId = SYNTHESIS_MODEL_IDS[synthesisModel];
   const prompt = buildSynthesisPrompt(content, analysisPrompt, responses, context, customSynthesisInstructions);
 
   // Bounded retry for the synthesis call ONLY. The fan-out `responses` are already in
-  // hand, so a transient Opus failure (network drop, 429 rate-limit, 5xx) must NOT
-  // bubble up and trigger a full 10-model council re-run. Retry transient failures with
-  // exponential backoff; fast-fail on 400/401/403 (bad request / auth / billing) where
-  // a retry would only burn the same error 4×.
-  const MAX_ATTEMPTS = 4;
+  // hand, so a transient Opus failure (network "fetch failed", 429 rate-limit, 5xx) must
+  // NOT bubble up and trigger a full 10-model council re-run — that costs ~11 min + full
+  // council spend to recover one cheap Opus call. Retry transient failures with
+  // exponential backoff (~2s, 4s, 8s + jitter); fast-fail on 400/401/403 and on bodies
+  // that name a permanent billing/auth/bad-request condition, where a retry can't help.
+  const maxAttempts = retryOptions?.maxAttempts ?? 4;
+  const baseDelayMs = retryOptions?.baseDelayMs ?? 2000;
   let lastError: Error | null = null;
 
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -167,12 +183,11 @@ export async function synthesizeDirect(
 
       if (!res.ok) {
         const err = await res.text();
-        // Non-retryable: malformed request, bad key, or no credits — fail fast.
-        if (res.status === 400 || res.status === 401 || res.status === 403) {
-          throw new Error(`Anthropic error (non-retryable): ${res.status} ${err.slice(0, 200)}`);
-        }
-        // Retryable (429 / 5xx / anything else transient).
-        throw new Error(`Anthropic error: ${res.status} ${err.slice(0, 200)}`);
+        const e: TaggedError = new Error(`Anthropic error: ${res.status} ${err.slice(0, 200)}`);
+        // Fast-fail on client errors (400/401/403) or any permanent-condition body;
+        // everything else (429 rate-limit, 5xx server) is transient and worth a retry.
+        e.nonRetryable = res.status === 400 || res.status === 401 || res.status === 403 || isNonRetryableBody(err);
+        throw e;
       }
 
       const data = await res.json();
@@ -185,20 +200,23 @@ export async function synthesizeDirect(
       return toolBlock.input as SynthesisResult;
     } catch (e) {
       lastError = e instanceof Error ? e : new Error(String(e));
-      // Fast-fail on non-retryable billing/auth/bad-request errors.
-      if (lastError.message.includes("(non-retryable)")) {
+      // Fast-fail on non-retryable billing/auth/bad-request errors. A thrown network
+      // error ("fetch failed") has no tag, so it falls through to the retry path.
+      if ((lastError as TaggedError).nonRetryable) {
         throw lastError;
       }
-      if (attempt < MAX_ATTEMPTS) {
-        // Exponential backoff with jitter: ~1s, 2s, 4s.
-        const backoffMs = 1000 * 2 ** (attempt - 1) + Math.floor(Math.random() * 250);
-        console.error(`  Synthesis attempt ${attempt}/${MAX_ATTEMPTS} failed (${lastError.message.slice(0, 120)}); retrying in ${backoffMs}ms...`);
+      if (attempt < maxAttempts) {
+        // Exponential backoff with jitter: ~2s, 4s, 8s.
+        const backoffMs = baseDelayMs * 2 ** (attempt - 1) + Math.floor(Math.random() * 500);
+        console.error(`  Synthesis attempt ${attempt}/${maxAttempts} failed (${lastError.message.slice(0, 120)}); retrying in ${backoffMs}ms...`);
         await new Promise((r) => setTimeout(r, backoffMs));
       }
     }
   }
 
-  throw new Error(`Synthesis failed after ${MAX_ATTEMPTS} attempts: ${lastError?.message ?? "unknown error"}`);
+  // Final failure after exhausting retries: re-throw the last error so callers see the
+  // original Anthropic/network message verbatim (unwrapped).
+  throw lastError ?? new Error("Synthesis failed: unknown error");
 }
 
 export function buildSynthesisPrompt(
