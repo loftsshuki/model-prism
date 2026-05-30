@@ -37,29 +37,34 @@ import { ModelInfo, ModelResponse, SynthesisResult } from "../src/lib/types";
 // `cheap`  → cost-optimized for bulk / low-stakes runs. 5 free + 5 cheap paid,
 //        ~$0.25/run. Opt in with `--roster cheap`.
 //
-// All model IDs curl-verified against the live OpenRouter catalog on 2026-05-30.
-// `:free` slots are cushioned by the auto-fallback (src/lib/fan-out.ts): a free slot
-// that 429/503s mid-run auto-swaps to its paid twin (or a cheap generalist), so a
-// flaky free endpoint never drops the council below quorum.
+// All model IDs + prices curl-verified against the live OpenRouter catalog, and each
+// is the NEWEST GA model in its family as of 2026-05-30 (checked via the catalog's
+// `created` timestamps). `:free` slots are cushioned by the auto-fallback
+// (src/lib/fan-out.ts): a free slot that 429/503s mid-run auto-swaps to its paid twin
+// (or a cheap generalist), so a flaky free endpoint never drops the council below quorum.
 //
-// Roster history: the prior "11 families" refresh (2026-05-03) shipped 3 broken IDs
-// (tencent/hy3-preview:free + nvidia/nemotron-nano-12b-v2:free were absent from the
-// catalog; openrouter/owl-alpha is a volatile cloaked alpha; anthropic/claude-haiku-4-5
-// used a hyphen where the catalog wants a dot). All corrected here.
+// 2026-05-30 refresh: bumped every paid slot to its newest family version (gpt-5.4→5.5,
+// gemini-2.5-pro→3.5-flash, qwen3.6-plus→3.7-max, deepseek-r1→v4-pro, kimi-thinking→k2.6,
+// grok-4.20→4.3). Dropped Claude Haiku 4.5 — it was the weakest reasoner and the only
+// proprietary small model, redundant with the Claude Opus synthesizer — for MiniMax M2.7,
+// a strong open-weight reasoner that adds a distinct family at ~1/4 the output cost.
+// Prior refresh history: the "11 families" set (2026-05-03) had shipped 3 broken IDs
+// (tencent/hy3-preview:free + nvidia/nemotron-nano-12b-v2:free absent from the catalog;
+// openrouter/owl-alpha a volatile cloaked alpha; claude-haiku-4-5 a hyphen/dot typo).
 
 const FRONTIER_COUNCIL: ModelInfo[] = [
   // --- 3 free diversity anchors (distinct strong families, $0) ---
   { id: "openai/gpt-oss-120b:free", name: "GPT-OSS 120B", family: "gpt-oss", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
   { id: "nvidia/nemotron-3-super-120b-a12b:free", name: "Nemotron 3 Super 120B", family: "nemotron", tier: "free", contextLength: 1000000, inputCostPer1k: 0, outputCostPer1k: 0 },
   { id: "z-ai/glm-4.5-air:free", name: "GLM 4.5 Air", family: "glm", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
-  // --- 7 paid frontier/reasoning slots, one per distinct family ---
-  { id: "anthropic/claude-haiku-4.5", name: "Claude Haiku 4.5", family: "claude", tier: "fast", contextLength: 200000, inputCostPer1k: 0.001, outputCostPer1k: 0.005 },
-  { id: "openai/gpt-5.4", name: "GPT-5.4", family: "gpt-5", tier: "fast", contextLength: 1050000, inputCostPer1k: 0.0025, outputCostPer1k: 0.015 },
-  { id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro", family: "gemini", tier: "fast", contextLength: 1048576, inputCostPer1k: 0.00125, outputCostPer1k: 0.010 },
-  { id: "x-ai/grok-4.20-multi-agent", name: "Grok 4.20 Multi-Agent", family: "grok", tier: "fast", contextLength: 2000000, inputCostPer1k: 0.002, outputCostPer1k: 0.006 },
-  { id: "qwen/qwen3.6-plus", name: "Qwen 3.6 Plus", family: "qwen", tier: "fast", contextLength: 1000000, inputCostPer1k: 0.000325, outputCostPer1k: 0.00195 },
-  { id: "deepseek/deepseek-r1-0528", name: "DeepSeek R1", family: "deepseek-r1", tier: "fast", contextLength: 163840, inputCostPer1k: 0.0005, outputCostPer1k: 0.00215 },
-  { id: "moonshotai/kimi-k2-thinking", name: "Kimi K2 Thinking", family: "kimi", tier: "fast", contextLength: 262144, inputCostPer1k: 0.0006, outputCostPer1k: 0.0025 },
+  // --- 7 paid frontier/reasoning slots, one per distinct family (newest GA each) ---
+  { id: "minimax/minimax-m2.7", name: "MiniMax M2.7", family: "minimax", tier: "fast", contextLength: 204800, inputCostPer1k: 0.00026, outputCostPer1k: 0.0012 },
+  { id: "openai/gpt-5.5", name: "GPT-5.5", family: "gpt-5", tier: "fast", contextLength: 1050000, inputCostPer1k: 0.005, outputCostPer1k: 0.030 },
+  { id: "google/gemini-3.5-flash", name: "Gemini 3.5 Flash", family: "gemini", tier: "fast", contextLength: 1048576, inputCostPer1k: 0.0015, outputCostPer1k: 0.009 },
+  { id: "x-ai/grok-4.3", name: "Grok 4.3", family: "grok", tier: "fast", contextLength: 1000000, inputCostPer1k: 0.00125, outputCostPer1k: 0.0025 },
+  { id: "qwen/qwen3.7-max", name: "Qwen 3.7 Max", family: "qwen", tier: "fast", contextLength: 1000000, inputCostPer1k: 0.00125, outputCostPer1k: 0.00375 },
+  { id: "deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro", family: "deepseek", tier: "fast", contextLength: 1048576, inputCostPer1k: 0.000435, outputCostPer1k: 0.00087 },
+  { id: "moonshotai/kimi-k2.6", name: "Kimi K2.6", family: "kimi", tier: "fast", contextLength: 262144, inputCostPer1k: 0.000684, outputCostPer1k: 0.00342 },
 ];
 
 const CHEAP_COUNCIL: ModelInfo[] = [
@@ -69,9 +74,9 @@ const CHEAP_COUNCIL: ModelInfo[] = [
   { id: "nvidia/nemotron-3-super-120b-a12b:free", name: "Nemotron 3 Super 120B", family: "nemotron", tier: "free", contextLength: 1000000, inputCostPer1k: 0, outputCostPer1k: 0 },
   { id: "z-ai/glm-4.5-air:free", name: "GLM 4.5 Air", family: "glm", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
   { id: "nousresearch/hermes-3-llama-3.1-405b:free", name: "Hermes 3 405B", family: "hermes-llama", tier: "free", contextLength: 131072, inputCostPer1k: 0, outputCostPer1k: 0 },
-  // --- 5 cheap paid models (distinct families; all curl-verified 2026-05-30) ---
-  { id: "anthropic/claude-haiku-4.5", name: "Claude Haiku 4.5", family: "claude", tier: "fast", contextLength: 200000, inputCostPer1k: 0.001, outputCostPer1k: 0.005 },
-  { id: "google/gemini-2.5-flash", name: "Gemini 2.5 Flash", family: "gemini", tier: "fast", contextLength: 1048576, inputCostPer1k: 0.0003, outputCostPer1k: 0.0025 },
+  // --- 5 cheap paid models (distinct families; newest GA each, curl-verified 2026-05-30) ---
+  { id: "minimax/minimax-m2.5", name: "MiniMax M2.5", family: "minimax", tier: "fast", contextLength: 204800, inputCostPer1k: 0.00015, outputCostPer1k: 0.00115 },
+  { id: "google/gemini-3.1-flash-lite", name: "Gemini 3.1 Flash Lite", family: "gemini", tier: "fast", contextLength: 1048576, inputCostPer1k: 0.00025, outputCostPer1k: 0.0015 },
   { id: "deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro", family: "deepseek", tier: "fast", contextLength: 1048576, inputCostPer1k: 0.000435, outputCostPer1k: 0.00087 },
   { id: "x-ai/grok-4.3", name: "Grok 4.3", family: "grok", tier: "fast", contextLength: 1000000, inputCostPer1k: 0.00125, outputCostPer1k: 0.0025 },
   { id: "moonshotai/kimi-k2.6", name: "Kimi K2.6", family: "kimi", tier: "fast", contextLength: 262144, inputCostPer1k: 0.000684, outputCostPer1k: 0.00342 },
@@ -151,12 +156,12 @@ Options:
                              auto-derived <dir>/reviews/<name>.review.md
   --exclude-model <id>       Drop a council model by ID (repeatable). Useful on
                              second-pass to drop the primary reviewer's model family
-                             for maximum divergence (e.g. --exclude-model anthropic/claude-haiku-4.5)
+                             for maximum divergence (e.g. --exclude-model openai/gpt-5.5)
   --roster <name>            Select a council preset. Options:
                                default / frontier (the DEFAULT — 3 free anchors +
-                                        7 frontier reasoning models: Haiku 4.5,
-                                        GPT-5.4, Gemini 2.5 Pro, Grok 4.20, Qwen 3.6
-                                        Plus, DeepSeek R1, Kimi K2 Thinking. ~$1-2/run.
+                                        7 frontier reasoning models: MiniMax M2.7,
+                                        GPT-5.5, Gemini 3.5 Flash, Grok 4.3, Qwen 3.7
+                                        Max, DeepSeek V4 Pro, Kimi K2.6. ~$1-2/run.
                                         Best results; runs on every plan)
                                cheap    (5 free + 5 cheap paid, ~$0.25/run, tuned for
                                         bulk / low-stakes throughput)
