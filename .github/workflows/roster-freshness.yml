@@ -1,0 +1,59 @@
+name: Roster freshness
+
+# Weekly check that the council rosters (src/lib/rosters.ts) still match the live
+# OpenRouter catalog. Opens/updates a single rolling issue when there are findings,
+# and fails the run if any roster model has been pulled from the catalog (DEAD).
+# The /models endpoint is public, so no secrets are needed.
+
+on:
+  schedule:
+    - cron: "0 14 * * 1" # Mondays 14:00 UTC
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Check roster freshness
+        id: check
+        run: bun scripts/check-roster-freshness.ts --out roster-freshness-report.md
+
+      - name: Publish report to run summary
+        if: always()
+        run: cat roster-freshness-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open or update rolling issue
+        if: ${{ steps.check.outputs.findings != '0' && steps.check.outputs.findings != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create roster-freshness --color FBCA04 --description "Council roster drift vs OpenRouter" 2>/dev/null || true
+          existing=$(gh issue list --label roster-freshness --state open --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            echo "Updating rolling issue #$existing"
+            gh issue comment "$existing" --body-file roster-freshness-report.md
+          else
+            echo "Opening new rolling issue"
+            gh issue create \
+              --title "🔭 Roster freshness: models drifted from the OpenRouter catalog" \
+              --label roster-freshness \
+              --body-file roster-freshness-report.md
+          fi
+
+      - name: Fail the run if any roster model is dead
+        if: ${{ steps.check.outputs.dead != '0' && steps.check.outputs.dead != '' }}
+        run: |
+          echo "::error::${{ steps.check.outputs.dead }} roster model(s) no longer exist in the OpenRouter catalog. See the issue / summary."
+          exit 1

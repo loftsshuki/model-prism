@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "review": "tsx scripts/review-plan.ts",
+    "check-roster": "tsx scripts/check-roster-freshness.ts",
     "test": "bun test src/"
   },
   "dependencies": {
