@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
+// Legacy server-side invoke endpoint. The main app now calls OpenRouter directly
+// from the browser to avoid Vercel duration limits. Keep this route for manual
+// smoke tests and backwards compatibility until no clients depend on it.
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {

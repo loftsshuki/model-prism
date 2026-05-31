@@ -4,15 +4,19 @@ import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { ModelInfo, ModelResponse, RunState, SynthesisResult, ContextPack } from "@/lib/types";
 import { FALLBACK_MODELS, estimateTokens, getModelsFilteredByContext, estimateCost } from "@/lib/model-registry";
 import { DEFAULT_TEMPLATES, PromptTemplate } from "@/lib/prompts";
+import { DEFAULT_RUN_PRESETS, ModelSelectionPreset, selectModelsForPreset } from "@/lib/run-presets";
+import { getActiveProjectProfileId, getProjectProfiles, ProjectProfile, setActiveProjectProfileId } from "@/lib/project-profiles";
 import { fanOut } from "@/lib/fan-out";
-import { synthesizeDirect } from "@/lib/synthesis";
+import { SYNTHESIS_MODEL_IDS, synthesizeDirect } from "@/lib/synthesis";
 import { getContextPacks, getActivePackId, buildContextString } from "@/lib/context-packs";
+import { jsonHeaders } from "@/lib/client-api";
 import { getCachedFileContent } from "@/lib/context-cache";
 import { ModelPicker } from "@/components/model-picker";
 import { ResponseCard } from "@/components/response-card";
 import { SynthesisView } from "@/components/synthesis-view";
 import { CompareView } from "@/components/compare-view";
 import { ContextPanel } from "@/components/context-panel";
+import { SynthesisComparisonView } from "@/components/synthesis-comparison";
 
 function generateId() {
   return `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -52,11 +56,25 @@ export default function Home() {
   const [responses, setResponses] = useState<Map<string, ModelResponse>>(new Map());
   const [status, setStatus] = useState<RunState["status"]>("idle");
   const [synthesis, setSynthesis] = useState<SynthesisResult | null>(null);
+  const [secondPassSynthesis, setSecondPassSynthesis] = useState<SynthesisResult | null>(null);
+  const [secondPassLoading, setSecondPassLoading] = useState(false);
+  const [secondPassError, setSecondPassError] = useState<string | null>(null);
   const [synthesisError, setSynthesisError] = useState<string | null>(null);
   const [compareIds, setCompareIds] = useState<Set<string>>(new Set());
   const [showCompare, setShowCompare] = useState(false);
   const [copied, setCopied] = useState(false);
   const [customTemplates, setCustomTemplates] = useState<PromptTemplate[]>([]);
+  const [projectProfiles, setProjectProfiles] = useState<ProjectProfile[]>([]);
+  const [activeProfileId, setActiveProfileId] = useState("");
+  const [selectedRunPresetId, setSelectedRunPresetId] = useState(DEFAULT_RUN_PRESETS[0].id);
+  const [maxRunCost, setMaxRunCost] = useState(() => {
+    if (typeof window !== "undefined") return Number(localStorage.getItem("model-prism-max-run-cost") || "1.5");
+    return 1.5;
+  });
+  const [prUrl, setPrUrl] = useState("");
+  const [prLoading, setPrLoading] = useState(false);
+  const [prError, setPrError] = useState<string | null>(null);
+  const appliedInitialProfileRef = useRef(false);
 
   // --- Context Pack state ---
   const [githubPat, setGithubPat] = useState(() => {
@@ -68,7 +86,11 @@ export default function Home() {
   const [contextFileContents, setContextFileContents] = useState<Record<string, string>>({});
   const [contextTokens, setContextTokens] = useState(0);
 
-  const allTemplates = useMemo(() => [...DEFAULT_TEMPLATES, ...customTemplates], [customTemplates]);
+  const allTemplates = useMemo(() => [
+    ...DEFAULT_RUN_PRESETS.map((preset) => ({ id: preset.id, name: preset.name, prompt: preset.prompt })),
+    ...DEFAULT_TEMPLATES,
+    ...customTemplates,
+  ], [customTemplates]);
 
   // Load active context pack on mount
   useEffect(() => {
@@ -94,6 +116,20 @@ export default function Home() {
 
   useEffect(() => {
     setCustomTemplates(getCustomTemplates());
+    const profiles = getProjectProfiles();
+    const activeProfile = getActiveProjectProfileId();
+    setProjectProfiles(profiles);
+    setActiveProfileId(activeProfile);
+    const profile = profiles.find((p) => p.id === activeProfile);
+    if (profile) {
+      setSelectedRunPresetId(profile.defaultRunPresetId);
+      setSynthesisModel(profile.defaultSynthesisModel);
+      setMaxRunCost(profile.defaultMaxCost);
+      localStorage.setItem("synthesis-model", profile.defaultSynthesisModel);
+      localStorage.setItem("model-prism-max-run-cost", String(profile.defaultMaxCost));
+    }
+    const storedPreset = localStorage.getItem("model-prism-run-preset");
+    if (storedPreset) setSelectedRunPresetId(storedPreset);
     const rerunData = sessionStorage.getItem("rerun");
     if (rerunData) {
       try {
@@ -138,9 +174,62 @@ export default function Home() {
   const selectedModelInfos = allModels.filter((m) => selectedModels.has(m.id));
   const costEstimate = estimateCost(selectedModelInfos, inputTokens);
 
+  const applyModelSelectionPreset = useCallback((preset: ModelSelectionPreset) => {
+    setSelectedModels(selectModelsForPreset(allModels, preset, tooSmall));
+  }, [allModels, tooSmall]);
+
+  const applyRunPreset = useCallback((presetId: string) => {
+    const preset = DEFAULT_RUN_PRESETS.find((item) => item.id === presetId);
+    if (!preset) return;
+
+    setSelectedRunPresetId(preset.id);
+    localStorage.setItem("model-prism-run-preset", preset.id);
+    setSelectedTemplate(preset.id);
+    setPrompt(preset.prompt);
+    setSynthesisModel(preset.synthesisModel);
+    localStorage.setItem("synthesis-model", preset.synthesisModel);
+    setMaxRunCost(preset.maxCost);
+    localStorage.setItem("model-prism-max-run-cost", String(preset.maxCost));
+    applyModelSelectionPreset(preset.modelPreset);
+  }, [applyModelSelectionPreset]);
+
+  const applyProjectProfile = useCallback((profileId: string) => {
+    const profile = projectProfiles.find((item) => item.id === profileId);
+    if (!profile) return;
+
+    setActiveProfileId(profile.id);
+    setActiveProjectProfileId(profile.id);
+    applyRunPreset(profile.defaultRunPresetId);
+    setSynthesisModel(profile.defaultSynthesisModel);
+    localStorage.setItem("synthesis-model", profile.defaultSynthesisModel);
+    setMaxRunCost(profile.defaultMaxCost);
+    localStorage.setItem("model-prism-max-run-cost", String(profile.defaultMaxCost));
+    applyModelSelectionPreset(profile.defaultModelPreset);
+
+    if (profile.defaultContextPackName) {
+      const pack = getContextPacks().find((item) => item.name.toLowerCase().includes(profile.defaultContextPackName!.toLowerCase()));
+      if (pack) {
+        setActivePack(pack);
+        setContextEnabled(true);
+      }
+    }
+  }, [applyModelSelectionPreset, applyRunPreset, projectProfiles]);
+
+  useEffect(() => {
+    if (modelsLoading || !projectProfiles.length || appliedInitialProfileRef.current) return;
+    appliedInitialProfileRef.current = true;
+    applyProjectProfile(activeProfileId || getActiveProjectProfileId());
+  }, [activeProfileId, applyProjectProfile, modelsLoading, projectProfiles.length]);
+
   const handleTemplateChange = (templateId: string) => {
+    const runPreset = DEFAULT_RUN_PRESETS.find((preset) => preset.id === templateId);
+    if (runPreset) {
+      applyRunPreset(runPreset.id);
+      return;
+    }
+
     setSelectedTemplate(templateId);
-    const t = allTemplates.find((t) => t.id === templateId);
+    const t = allTemplates.find((item) => item.id === templateId);
     if (t) setPrompt(t.prompt);
   };
 
@@ -187,6 +276,34 @@ export default function Home() {
     else { setAnthropicKey(key); localStorage.setItem("anthropic-api-key", key); }
   };
 
+  const loadPullRequest = useCallback(async () => {
+    const match = prUrl.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/i);
+    if (!match) {
+      setPrError("Paste a GitHub PR URL like https://github.com/owner/repo/pull/123");
+      return;
+    }
+    const [, owner, repo, pullNumber] = match;
+    setPrLoading(true);
+    setPrError(null);
+    try {
+      const headers: Record<string, string> = { Accept: "application/vnd.github.v3.diff" };
+      if (githubPat) headers.Authorization = `Bearer ${githubPat}`;
+      const diffRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${pullNumber}`, { headers });
+      if (!diffRes.ok) throw new Error(`GitHub returned ${diffRes.status}. Check token access or PR URL.`);
+      const diff = await diffRes.text();
+      const metaHeaders: Record<string, string> = { Accept: "application/vnd.github+json" };
+      if (githubPat) metaHeaders.Authorization = `Bearer ${githubPat}`;
+      const meta = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${pullNumber}`, { headers: metaHeaders }).then((r) => r.ok ? r.json() : null).catch(() => null);
+      setContent(`# Pull Request Review\n\nRepo: ${owner}/${repo}\nPR: #${pullNumber}${meta?.title ? ` — ${meta.title}` : ""}\nURL: ${prUrl}\n\n## Diff\n\n\`\`\`diff\n${diff.slice(0, 120000)}\n\`\`\``);
+      applyRunPreset("code-review");
+      setPrUrl("");
+    } catch (error) {
+      setPrError(error instanceof Error ? error.message : "Could not load PR diff");
+    } finally {
+      setPrLoading(false);
+    }
+  }, [applyRunPreset, githubPat, prUrl]);
+
   const toggleCompare = (modelId: string) => {
     setCompareIds((prev) => {
       const next = new Set(prev);
@@ -204,10 +321,12 @@ export default function Home() {
   }, [activePack, contextEnabled, contextFileContents]);
 
   const runSynthesis = useCallback(
-    async (runId: string, completedResponses: ModelResponse[]) => {
+    async (runId: string, completedResponses: ModelResponse[], durationSec = 0) => {
       if (!anthropicKey) { setStatus("complete"); return; }
       setStatus("synthesizing");
       setSynthesisError(null);
+      setSecondPassSynthesis(null);
+      setSecondPassError(null);
       const successful = completedResponses.filter((r) => r.status === "complete" && r.response);
       if (successful.length < 2) { setStatus("complete"); return; }
       const responsesForSynthesis = successful.map((r) => {
@@ -218,23 +337,88 @@ export default function Home() {
         const contextString = getContextString();
         const result = await synthesizeDirect(anthropicKey, synthesisModel, content, prompt, responsesForSynthesis, contextString);
         setSynthesis(result);
-        // Save to DB in background
+        // Save to DB and telemetry ledger in background
+        const modelId = SYNTHESIS_MODEL_IDS[synthesisModel];
         if (runId) {
-          const modelId = synthesisModel === "opus" ? "claude-opus-4-6" : "claude-sonnet-4-6";
           fetch("/api/synthesize/save", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: jsonHeaders(),
             body: JSON.stringify({ runId, result: JSON.stringify(result), modelUsed: modelId }),
           }).catch(() => {});
         }
+        const usedModelIds = new Set(completedResponses.map((response) => response.model));
+        fetch("/api/telemetry", {
+          method: "POST",
+          headers: jsonHeaders(),
+          body: JSON.stringify({
+            content,
+            contextRepo: activePack?.repo || "none",
+            durationSec,
+            plan: selectedRunPresetId,
+            responses: completedResponses,
+            roster: selectedRunPresetId,
+            synthesis: result,
+            synthesisModel: modelId,
+            usedModels: allModels.filter((model) => usedModelIds.has(model.id)),
+          }),
+        }).catch(() => {});
       } catch (error) {
         console.error("Synthesis failed:", error);
         setSynthesisError(error instanceof Error ? error.message : "Synthesis failed");
       }
       setStatus("complete");
     },
-    [anthropicKey, content, prompt, synthesisModel, allModels, getContextString]
+    [activePack?.repo, anthropicKey, content, prompt, selectedRunPresetId, synthesisModel, allModels, getContextString]
   );
+
+  const runSecondPass = useCallback(async () => {
+    if (!anthropicKey || !synthesis) {
+      if (!anthropicKey) setShowKeyInput(true);
+      return;
+    }
+
+    const successful = [...responses.values()].filter((r) => r.status === "complete" && r.response);
+    if (successful.length < 2) {
+      setSecondPassError("Second pass needs at least two completed model responses.");
+      return;
+    }
+
+    const responsesForSynthesis = successful.map((r) => {
+      const model = allModels.find((m) => m.id === r.model);
+      return { model: r.model, modelName: r.modelName, family: model?.family ?? "unknown", response: r.response! };
+    });
+
+    setSecondPassLoading(true);
+    setSecondPassError(null);
+    try {
+      const contextString = getContextString();
+      const secondPassInstructions = `Critique the existing synthesis instead of simply producing another normal synthesis.
+
+Focus on:
+- assumptions the synthesis made without enough evidence
+- risks, blockers, or edge cases it missed
+- weak or vague recommendations that need to become concrete
+- contradictions between model responses that the synthesis smoothed over
+- missing tests, security checks, or rollout safeguards
+
+Produce a revised masterDocument that starts with a direct verdict: APPROVE, APPROVE WITH CHANGES, or REVISE. Then list must-fix items, should-fix items, and remaining open questions. Keep the structured fields populated as usual.`;
+      const result = await synthesizeDirect(
+        anthropicKey,
+        synthesisModel,
+        `Original content:\n${content}\n\nExisting synthesis to critique:\n${synthesis.masterDocument || ""}`,
+        prompt,
+        responsesForSynthesis,
+        contextString,
+        secondPassInstructions
+      );
+      setSecondPassSynthesis(result);
+    } catch (error) {
+      console.error("Second-pass synthesis failed:", error);
+      setSecondPassError(error instanceof Error ? error.message : "Second-pass synthesis failed");
+    } finally {
+      setSecondPassLoading(false);
+    }
+  }, [allModels, anthropicKey, content, getContextString, prompt, responses, synthesis, synthesisModel]);
 
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [aborted, setAborted] = useState(false);
@@ -253,13 +437,22 @@ export default function Home() {
 
     if (modelsToRun.length === 0) return;
 
+    const estimatedRunCost = estimateCost(modelsToRun, inputTokens);
+    if (maxRunCost > 0 && estimatedRunCost > maxRunCost) {
+      const proceed = window.confirm(`Estimated cost is $${estimatedRunCost.toFixed(4)}, above your $${maxRunCost.toFixed(2)} run budget. Continue anyway?`);
+      if (!proceed) return;
+    }
+
     const isAppending = responses.size > 0 && alreadyRan.size > 0;
     const runId = isAppending && currentRunId ? currentRunId : generateId();
 
+    const runStartedAt = Date.now();
     setStatus("running");
     setSynthesis(null);
+    setSecondPassSynthesis(null);
     setSynthesisError(null);
-    setRunStartTime(Date.now());
+    setSecondPassError(null);
+    setRunStartTime(runStartedAt);
     setElapsed(0);
 
     if (!isAppending) {
@@ -282,7 +475,7 @@ export default function Home() {
       try {
         await fetch("/api/runs", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: jsonHeaders(),
           body: JSON.stringify({
             id: runId, content, prompt,
             models: modelsToRun.map((m) => m.id),
@@ -324,8 +517,8 @@ export default function Home() {
       ...[...responses.values()].filter((r) => r.status === "complete" && !modelsToRun.find((m) => m.id === r.model)),
       ...newResults,
     ];
-    await runSynthesis(runId, allCompleted);
-  }, [content, prompt, selectedModels, apiKey, allModels, runSynthesis, responses, currentRunId, getContextString, activePack, contextEnabled, contextTokens]);
+    await runSynthesis(runId, allCompleted, Math.floor((Date.now() - runStartedAt) / 1000));
+  }, [content, prompt, selectedModels, apiKey, allModels, runSynthesis, responses, currentRunId, getContextString, activePack, contextEnabled, contextTokens, inputTokens, maxRunCost]);
 
   const handleStop = useCallback(() => {
     abortRef.current = true;
@@ -342,8 +535,9 @@ export default function Home() {
     if (failedModels.length === 0) return;
 
     const runId = currentRunId || generateId();
+    const runStartedAt = Date.now();
     setStatus("running");
-    setRunStartTime(Date.now());
+    setRunStartTime(runStartedAt);
     setElapsed(0);
     abortRef.current = false;
     setAborted(false);
@@ -376,7 +570,7 @@ export default function Home() {
       ...[...responses.values()].filter((r) => r.status === "complete" && !failedModels.find((m) => m.id === r.model)),
       ...newResults,
     ];
-    await runSynthesis(runId, allCompleted);
+    await runSynthesis(runId, allCompleted, Math.floor((Date.now() - runStartedAt) / 1000));
   }, [apiKey, allModels, responses, currentRunId, content, prompt, runSynthesis, getContextString]);
 
   const completedCount = [...responses.values()].filter((r) => r.status === "complete" || r.status === "error").length;
@@ -434,6 +628,8 @@ export default function Home() {
           </div>
           <nav className="flex items-center gap-6">
             <a href="/history" className="cta-text text-cream/60 hover:text-cream transition-colors duration-300">History</a>
+            <a href="/models" className="cta-text text-cream/60 hover:text-cream transition-colors duration-300">Models</a>
+            <a href="/hooks" className="cta-text text-cream/60 hover:text-cream transition-colors duration-300">Hooks</a>
             <a href="/settings" className="cta-text text-cream/60 hover:text-cream transition-colors duration-300">Settings</a>
             <button
               onClick={() => setShowKeyInput(!showKeyInput)}
@@ -480,6 +676,90 @@ export default function Home() {
         {/* Left Sidebar — Input */}
         <aside className="w-1/2 shrink-0 border-r border-border bg-white overflow-y-auto">
           <div className="p-6 lg:p-8 space-y-6">
+            {/* Section: Project + Run Preset */}
+            <div className="border border-border bg-cream/40 p-4 space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-px bg-green" />
+                <span className="overline text-green">Project + Run Setup</span>
+              </div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-[10px] uppercase tracking-[0.16em] text-grey-40">Project profile</span>
+                  <select
+                    value={activeProfileId}
+                    onChange={(e) => applyProjectProfile(e.target.value)}
+                    className="mt-1 w-full bg-white border border-border px-3 py-2 text-sm text-ink focus:outline-none focus:border-green"
+                  >
+                    {projectProfiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>{profile.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="text-[10px] uppercase tracking-[0.16em] text-grey-40">Run preset</span>
+                  <select
+                    value={selectedRunPresetId}
+                    onChange={(e) => applyRunPreset(e.target.value)}
+                    className="mt-1 w-full bg-white border border-border px-3 py-2 text-sm text-ink focus:outline-none focus:border-green"
+                  >
+                    {DEFAULT_RUN_PRESETS.map((preset) => (
+                      <option key={preset.id} value={preset.id}>{preset.name}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-3 items-end">
+                <p className="text-xs text-grey-40 leading-relaxed">
+                  {DEFAULT_RUN_PRESETS.find((preset) => preset.id === selectedRunPresetId)?.description || "Choose a preset to configure prompt, model mix, synthesis model, and budget."}
+                </p>
+                <label className="block min-w-[150px]">
+                  <span className="text-[10px] uppercase tracking-[0.16em] text-grey-40">Max run cost</span>
+                  <div className="mt-1 flex items-center gap-1 bg-white border border-border px-3 py-2">
+                    <span className="text-sm text-grey-40">$</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.25"
+                      value={maxRunCost}
+                      onChange={(e) => {
+                        const value = Number(e.target.value || "0");
+                        setMaxRunCost(value);
+                        localStorage.setItem("model-prism-max-run-cost", String(value));
+                      }}
+                      className="w-full bg-transparent text-sm text-ink focus:outline-none"
+                    />
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            {/* Section: PR Review */}
+            <div className="border border-border bg-white p-4 space-y-3">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-px bg-green" />
+                <span className="overline text-green">GitHub PR Review</span>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={prUrl}
+                  onChange={(e) => setPrUrl(e.target.value)}
+                  placeholder="https://github.com/owner/repo/pull/123"
+                  className="flex-1 bg-grey-5 border border-border px-3 py-2 text-xs text-ink placeholder:text-grey-30 focus:outline-none focus:border-green"
+                />
+                <button
+                  onClick={loadPullRequest}
+                  disabled={prLoading || !prUrl.trim()}
+                  className="cta-text px-4 py-2 border border-green text-green hover:bg-green-light disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-300"
+                >
+                  {prLoading ? "Loading" : "Load Diff"}
+                </button>
+              </div>
+              {prError && <p className="text-[10px] text-red-600">{prError}</p>}
+              <p className="text-[10px] text-grey-30 leading-relaxed">
+                Loads the PR diff into Content and switches to the Code Review preset. Private repos need a GitHub token in Settings.
+              </p>
+            </div>
+
             {/* Section: Content */}
             <div>
               <div className="flex items-center gap-3 mb-4">
@@ -546,7 +826,9 @@ export default function Home() {
                 <div className="space-y-1 mt-3">
                   <div className="flex justify-between text-[10px] text-grey-40 tracking-wide">
                     <span>Estimated cost</span>
-                    <span className="text-gold font-medium">${costEstimate.toFixed(4)}</span>
+                    <span className={`font-medium ${maxRunCost > 0 && costEstimate > maxRunCost ? "text-red-600" : "text-gold"}`}>
+                      ${costEstimate.toFixed(4)} / ${maxRunCost.toFixed(2)} max
+                    </span>
                   </div>
                   {contextTokens > 0 && contextEnabled && (
                     <div className="flex justify-between text-[10px] text-grey-30 tracking-wide">
@@ -617,8 +899,27 @@ export default function Home() {
 
             {/* Synthesis */}
             {synthesis && (
-              <div className="mb-8">
-                <SynthesisView synthesis={synthesis} />
+              <div className="mb-8 space-y-8">
+                <SynthesisView
+                  synthesis={synthesis}
+                  onSecondPass={runSecondPass}
+                  secondPassLoading={secondPassLoading}
+                />
+                {secondPassError && (
+                  <div className="border border-red-200 bg-red-50 text-red-700 text-sm p-4">
+                    {secondPassError}
+                  </div>
+                )}
+                {secondPassSynthesis && (
+                  <>
+                    <SynthesisComparisonView previous={synthesis} next={secondPassSynthesis} />
+                    <SynthesisView
+                      synthesis={secondPassSynthesis}
+                      title="Second-Pass Review"
+                      eyebrow="Synthesis critique"
+                    />
+                  </>
+                )}
               </div>
             )}
 

@@ -1,8 +1,6 @@
 import { describe, it, expect, afterEach } from "bun:test";
-import * as os from "node:os";
-import * as path from "node:path";
 import * as fs from "node:fs";
-import { buildRunTelemetry, appendRunTelemetry, loadTelemetry, aggregateModelValue } from "./telemetry";
+import { buildRunTelemetry, appendRunTelemetry, loadTelemetry, aggregateModelValue, analyzeModelFailures, recommendRosterChanges, TELEMETRY_PATH } from "./telemetry";
 import { ModelInfo, ModelResponse, SynthesisResult } from "./types";
 
 const USED: ModelInfo[] = [
@@ -37,8 +35,14 @@ function run() {
   });
 }
 
-const tmp = path.join(os.tmpdir(), `mp-telemetry-${process.pid}.jsonl`);
-afterEach(() => { try { fs.unlinkSync(tmp); } catch { /* ignore */ } });
+let telemetryBackup: string | null = null;
+afterEach(() => {
+  try {
+    if (telemetryBackup === null) fs.rmSync(TELEMETRY_PATH, { force: true });
+    else fs.writeFileSync(TELEMETRY_PATH, telemetryBackup, "utf-8");
+  } catch { /* ignore */ }
+  telemetryBackup = null;
+});
 
 describe("buildRunTelemetry", () => {
   it("attributes theme coverage, unique insights, and consensus to the right model by name", () => {
@@ -88,12 +92,26 @@ describe("aggregateModelValue", () => {
   });
 });
 
+describe("model intelligence", () => {
+  it("surfaces failure diagnostics and roster recommendations", () => {
+    const rows = aggregateModelValue([run(), run()]);
+    const diagnostics = analyzeModelFailures(rows);
+    const recommendations = recommendRosterChanges(rows);
+
+    expect(diagnostics.some((d) => d.id === "a/y" && d.severity === "high")).toBe(true);
+    expect(recommendations.some((r) => r.modelId === "a/y" && r.type === "replace")).toBe(true);
+    expect(recommendations.some((r) => r.modelId === "a/x" && r.type === "promote")).toBe(true);
+  });
+});
+
 describe("append + load round-trip", () => {
   it("persists and re-reads a run, skipping corrupt lines", () => {
-    appendRunTelemetry(run(), tmp);
-    fs.appendFileSync(tmp, "{not json}\n");
-    appendRunTelemetry(run(), tmp);
-    const loaded = loadTelemetry(tmp);
+    try { telemetryBackup = fs.readFileSync(TELEMETRY_PATH, "utf-8"); } catch { telemetryBackup = null; }
+    fs.rmSync(TELEMETRY_PATH, { force: true });
+    appendRunTelemetry(run());
+    fs.appendFileSync(TELEMETRY_PATH, "{not json}\n");
+    appendRunTelemetry(run());
+    const loaded = loadTelemetry();
     expect(loaded.length).toBe(2); // corrupt line skipped, two valid runs kept
     expect(loaded[0].models.length).toBe(2);
   });

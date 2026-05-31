@@ -1,27 +1,112 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { SynthesisResult } from "@/lib/types";
+import { analyzeReviewQuality, buildActionChecklistMarkdown, extractActionItems } from "@/lib/review-analysis";
 import { ThemeHeatmap } from "./theme-heatmap";
 
 interface SynthesisViewProps {
   synthesis: SynthesisResult;
+  title?: string;
+  eyebrow?: string;
+  onSecondPass?: () => void;
+  secondPassLoading?: boolean;
 }
 
-export function SynthesisView({ synthesis }: SynthesisViewProps) {
+export function SynthesisView({
+  synthesis,
+  title = "Master Synthesis",
+  eyebrow = "All models distilled",
+  onSecondPass,
+  secondPassLoading = false,
+}: SynthesisViewProps) {
   const [showBreakdown, setShowBreakdown] = useState(false);
+  const [copiedChecklist, setCopiedChecklist] = useState(false);
+  const quality = useMemo(() => analyzeReviewQuality(synthesis), [synthesis]);
+  const actionItems = useMemo(() => extractActionItems(synthesis), [synthesis]);
+
+  const copyChecklist = async () => {
+    await navigator.clipboard.writeText(buildActionChecklistMarkdown(actionItems));
+    setCopiedChecklist(true);
+    window.setTimeout(() => setCopiedChecklist(false), 1600);
+  };
 
   return (
     <div className="space-y-6">
+      <div className="border border-border bg-white p-5 lg:p-6">
+        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-5">
+          <div>
+            <div className="flex items-center gap-3">
+              <div className="text-4xl font-display font-bold text-green">{quality.score}</div>
+              <div>
+                <p className="overline text-grey-30">Review Quality</p>
+                <p className="text-sm text-grey-50">Risk: <span className="text-ink font-medium">{quality.risk}</span> · Actionability: <span className="text-ink font-medium">{quality.actionability}</span></p>
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-2 lg:grid-cols-4 gap-2 text-[11px] text-grey-40">
+              <span className="bg-grey-5 px-2 py-1">Coverage {quality.coverage}</span>
+              <span className="bg-grey-5 px-2 py-1">Confidence {quality.confidence}</span>
+              <span className="bg-grey-5 px-2 py-1">Disagreement {quality.disagreementLevel}</span>
+              <span className="bg-grey-5 px-2 py-1">Missing context {quality.missingContextRisk}</span>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {onSecondPass && (
+              <button
+                onClick={onSecondPass}
+                disabled={secondPassLoading}
+                className="cta-text px-4 py-2 bg-green text-cream hover:bg-green-hover disabled:opacity-40 transition-colors duration-300"
+              >
+                {secondPassLoading ? "Second pass..." : "Second Pass"}
+              </button>
+            )}
+            <button
+              onClick={copyChecklist}
+              disabled={actionItems.length === 0}
+              className="cta-text px-4 py-2 border border-border text-grey-50 hover:border-green hover:text-green disabled:opacity-40 transition-colors duration-300"
+            >
+              {copiedChecklist ? "Copied" : `Copy Checklist (${actionItems.length})`}
+            </button>
+          </div>
+        </div>
+        {quality.reasons.length > 0 && (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {quality.reasons.map((reason) => (
+              <span key={reason} className="text-[10px] uppercase tracking-wide text-grey-40 border border-border px-2 py-1">{reason}</span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {actionItems.length > 0 && (
+        <div className="border border-border bg-white p-5 lg:p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-8 h-px bg-gold" />
+            <h2 className="font-display text-xl font-bold text-grey-60">Extracted Action Items</h2>
+          </div>
+          <div className="space-y-2">
+            {actionItems.slice(0, 10).map((item) => (
+              <div key={item.id} className="flex items-start gap-3 text-sm text-grey-60 border-l-2 border-gold/30 pl-3 py-1">
+                <span className="mt-0.5 text-[10px] uppercase tracking-wide text-gold min-w-12">{item.priority}</span>
+                <div>
+                  <p>{item.text}</p>
+                  <p className="text-[10px] text-grey-30 mt-1">{item.category} · {item.owner}{item.file ? ` · ${item.file}` : ""}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Master Document — the main event */}
       {synthesis.masterDocument && (
         <div className="border border-green bg-white p-6 lg:p-8">
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
               <div className="w-8 h-px bg-green" />
-              <h2 className="font-display text-2xl font-bold text-ink">Master Synthesis</h2>
+              <h2 className="font-display text-2xl font-bold text-ink">{title}</h2>
             </div>
-            <span className="overline text-grey-30">All models distilled</span>
+            <span className="overline text-grey-30">{eyebrow}</span>
           </div>
           <div
             className="prose prose-sm max-w-none text-grey-60 leading-relaxed

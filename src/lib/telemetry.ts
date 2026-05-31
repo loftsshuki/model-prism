@@ -1,4 +1,3 @@
-import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import { ModelInfo, ModelResponse, SynthesisResult } from "./types";
@@ -9,7 +8,7 @@ import { ModelInfo, ModelResponse, SynthesisResult } from "./types";
 // the themes, who fails/falls back, and at what cost. The ledger lives in the user's home
 // (cross-repo, never committed) — it's runtime data, not source.
 export const TELEMETRY_PATH =
-  process.env.MODEL_PRISM_TELEMETRY || path.join(os.homedir(), ".model-prism", "model-telemetry.jsonl");
+  process.env.MODEL_PRISM_TELEMETRY || path.join(process.cwd(), ".model-prism", "model-telemetry.jsonl");
 
 export interface ModelRunTelemetry {
   id: string;
@@ -133,17 +132,15 @@ export function buildRunTelemetry(a: BuildRunArgs): RunTelemetry {
 }
 
 // Best-effort append — telemetry must NEVER break a review. Caller wraps in try/catch too.
-export function appendRunTelemetry(record: RunTelemetry, pathOverride?: string): void {
-  const file = pathOverride || TELEMETRY_PATH;
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.appendFileSync(file, JSON.stringify(record) + "\n", "utf-8");
+export function appendRunTelemetry(record: RunTelemetry): void {
+  fs.mkdirSync(path.dirname(TELEMETRY_PATH), { recursive: true });
+  fs.appendFileSync(TELEMETRY_PATH, JSON.stringify(record) + "\n", "utf-8");
 }
 
-export function loadTelemetry(pathOverride?: string): RunTelemetry[] {
-  const file = pathOverride || TELEMETRY_PATH;
-  if (!fs.existsSync(file)) return [];
+export function loadTelemetry(): RunTelemetry[] {
+  if (!fs.existsSync(TELEMETRY_PATH)) return [];
   const out: RunTelemetry[] = [];
-  for (const line of fs.readFileSync(file, "utf-8").split("\n")) {
+  for (const line of fs.readFileSync(TELEMETRY_PATH, "utf-8").split("\n")) {
     const t = line.trim();
     if (!t) continue;
     try {
@@ -173,6 +170,24 @@ export interface ModelValueRow {
   costPerInsight: number | null; // totalCost / weighted unique (gold), null if no gold
   valueScore: number; // composite for ranking
   verdict: string;
+}
+
+export interface ModelFailureDiagnostic {
+  id: string;
+  name: string;
+  severity: "low" | "medium" | "high";
+  failureRate: number;
+  fallbackRate: number;
+  appearances: number;
+  message: string;
+}
+
+export interface RosterRecommendation {
+  id: string;
+  type: "keep" | "watch" | "replace" | "promote";
+  modelId: string;
+  modelName: string;
+  reason: string;
 }
 
 function weightedUnique(m: ModelRunTelemetry): number {
@@ -250,4 +265,89 @@ function verdictFor(x: {
   if (x.uniquePerRun >= 0.5 || theme >= 2) return "✅ solid contributor";
   if (x.uniquePerRun < 0.25 && theme < 1.5) return "🔻 low signal — swap candidate";
   return "⚠️ marginal — watch";
+}
+
+export function analyzeModelFailures(rows: ModelValueRow[]): ModelFailureDiagnostic[] {
+  return rows
+    .filter((row) => row.appearances > 0)
+    .map((row) => {
+      const failureRate = row.errors / row.appearances;
+      const fallbackRate = row.fallbacks / row.appearances;
+      const combined = Math.max(failureRate, fallbackRate);
+      const severity: ModelFailureDiagnostic["severity"] = combined >= 0.4
+        ? "high"
+        : combined >= 0.15
+          ? "medium"
+          : "low";
+      return {
+        id: row.id,
+        name: row.name,
+        severity,
+        failureRate,
+        fallbackRate,
+        appearances: row.appearances,
+        message: `${Math.round(failureRate * 100)}% errors, ${Math.round(fallbackRate * 100)}% fallback usage across ${row.appearances} run${row.appearances === 1 ? "" : "s"}`,
+      };
+    })
+    .filter((item) => item.severity !== "low")
+    .sort((a, b) => {
+      const severityRank = { high: 2, medium: 1, low: 0 };
+      return severityRank[b.severity] - severityRank[a.severity] || Math.max(b.failureRate, b.fallbackRate) - Math.max(a.failureRate, a.fallbackRate);
+    });
+}
+
+export function recommendRosterChanges(rows: ModelValueRow[]): RosterRecommendation[] {
+  const recommendations: RosterRecommendation[] = [];
+  const ranked = [...rows].sort((a, b) => b.valueScore - a.valueScore);
+
+  for (const row of ranked) {
+    const failureRate = row.errors / Math.max(row.appearances, 1);
+    const fallbackRate = row.fallbacks / Math.max(row.appearances, 1);
+    const theme = row.themeAvg ?? 0;
+
+    if (row.appearances >= 2 && (failureRate >= 0.4 || fallbackRate >= 0.4)) {
+      recommendations.push({
+        id: `replace-${row.id}`,
+        type: "replace",
+        modelId: row.id,
+        modelName: row.name,
+        reason: `Unreliable: ${Math.round(failureRate * 100)}% errors and ${Math.round(fallbackRate * 100)}% fallbacks.`,
+      });
+      continue;
+    }
+
+    if (row.appearances >= 2 && row.uniquePerRun < 0.25 && theme < 1.5 && row.totalCost > 0) {
+      recommendations.push({
+        id: `watch-${row.id}`,
+        type: "watch",
+        modelId: row.id,
+        modelName: row.name,
+        reason: "Low unique-insight and theme coverage signal for paid spend.",
+      });
+      continue;
+    }
+
+    if (row.appearances >= 1 && row.uniquePerRun >= 1.5 && row.successRate >= 0.8) {
+      recommendations.push({
+        id: `promote-${row.id}`,
+        type: "promote",
+        modelId: row.id,
+        modelName: row.name,
+        reason: `High value contributor: ${row.uniquePerRun.toFixed(1)} weighted unique insights per run.`,
+      });
+      continue;
+    }
+
+    if (row.appearances >= 3 && row.successRate >= 0.85 && (row.uniquePerRun >= 0.5 || theme >= 2)) {
+      recommendations.push({
+        id: `keep-${row.id}`,
+        type: "keep",
+        modelId: row.id,
+        modelName: row.name,
+        reason: "Reliable model with useful coverage or unique insight contribution.",
+      });
+    }
+  }
+
+  return recommendations.slice(0, 12);
 }

@@ -3,10 +3,17 @@ import { generateObject } from "ai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { SynthesisSchema, buildSynthesisPrompt } from "@/lib/synthesis";
 import { saveSynthesis } from "@/lib/db";
+import { requireAdminToken } from "@/lib/api-auth";
 
+// Legacy server-side synthesis endpoint. The main app now uses synthesizeDirect()
+// from the browser so long syntheses are not capped by Vercel function duration.
+// Keep this route for compatibility until confirmed unused in production.
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
+  const unauthorized = requireAdminToken(req);
+  if (unauthorized) return unauthorized;
+
   const { runId, content, analysisPrompt, responses, synthesisModel, anthropicKey } = await req.json();
 
   if (!responses?.length) {

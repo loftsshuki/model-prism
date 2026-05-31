@@ -11,7 +11,7 @@
     "check-roster": "tsx scripts/check-roster-freshness.ts",
     "model-value": "tsx scripts/model-value.ts",
     "review-digest": "tsx scripts/review-digest.ts",
-    "test": "bun test src/"
+    "test": "node scripts/run-bun-tests.mjs"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.66",

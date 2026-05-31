@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { saveResponse, updateRunCost } from "@/lib/db";
+import { requireAdminToken } from "@/lib/api-auth";
 
 export async function POST(req: NextRequest) {
+  const unauthorized = requireAdminToken(req);
+  if (unauthorized) return unauthorized;
+
   const { runId, model, modelName, family, response, error, timeMs, inputTokens, outputTokens, cost } = await req.json();
 
   if (!runId || !model) {

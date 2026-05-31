@@ -38,6 +38,7 @@ export interface ContextPack {
   brief: string;           // The repo brief text (user-editable)
   briefEnhanced: boolean;  // true if AI-enhanced
   selectedFiles: string[]; // Paths of files to attach (contents fetched on demand)
+  templateId?: string;     // Optional context-pack template used to seed this pack
   createdAt: string;       // ISO timestamp
   updatedAt: string;       // ISO timestamp
 }

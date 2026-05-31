@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { authHeaders } from "@/lib/client-api";
 
 interface RunSummary {
   id: string;
@@ -32,7 +33,7 @@ export default function HistoryPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/runs")
+    fetch("/api/runs", { headers: authHeaders() })
       .then((r) => r.json())
       .then((data) => {
         setRuns(data.runs || []);

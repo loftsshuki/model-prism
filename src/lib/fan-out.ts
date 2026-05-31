@@ -1,4 +1,5 @@
 import pLimit from "p-limit";
+import { jsonHeaders } from "./client-api";
 import { ModelInfo, ModelResponse } from "./types";
 
 const paidLimit = pLimit(6);
@@ -136,7 +137,7 @@ async function persistResponse(runId: string, model: ModelInfo, result: ModelRes
   try {
     await fetch("/api/save-response", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: jsonHeaders(),
       body: JSON.stringify({
         runId,
         model: model.id,

@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { DEFAULT_TEMPLATES, PromptTemplate } from "@/lib/prompts";
+import { DEFAULT_RUN_PRESETS, ModelSelectionPreset } from "@/lib/run-presets";
+import { BUILT_IN_PROJECT_PROFILES, createProjectProfile, getCustomProjectProfiles, ProjectProfile, saveCustomProjectProfiles } from "@/lib/project-profiles";
 import { validatePat, getRateLimitInfo } from "@/lib/github";
 import { getCacheSize, getCacheEntryCount, clearAllCache } from "@/lib/context-cache";
 import { PatValidationResult } from "@/lib/types";
@@ -23,10 +25,19 @@ function getCustomTemplates(): PromptTemplate[] {
 export default function SettingsPage() {
   const [openrouterKey, setOpenrouterKey] = useState("");
   const [anthropicKey, setAnthropicKey] = useState("");
+  const [adminToken, setAdminToken] = useState("");
   const [synthesisModel, setSynthesisModel] = useState("sonnet");
   const [customTemplates, setCustomTemplates] = useState<PromptTemplate[]>([]);
   const [newName, setNewName] = useState("");
   const [newPrompt, setNewPrompt] = useState("");
+  const [customProfiles, setCustomProfiles] = useState<ProjectProfile[]>([]);
+  const [profileName, setProfileName] = useState("");
+  const [profileDescription, setProfileDescription] = useState("");
+  const [profileRunPreset, setProfileRunPreset] = useState(DEFAULT_RUN_PRESETS[0].id);
+  const [profileModelPreset, setProfileModelPreset] = useState<ModelSelectionPreset>("diverse");
+  const [profileSynthesisModel, setProfileSynthesisModel] = useState<"sonnet" | "opus">("opus");
+  const [profileMaxCost, setProfileMaxCost] = useState(1.5);
+  const [profileContextName, setProfileContextName] = useState("");
   const [saved, setSaved] = useState(false);
 
   // GitHub PAT state
@@ -42,9 +53,11 @@ export default function SettingsPage() {
   useEffect(() => {
     setOpenrouterKey(getStoredKey("openrouter-api-key"));
     setAnthropicKey(getStoredKey("anthropic-api-key"));
+    setAdminToken(getStoredKey("model-prism-admin-token"));
     setSynthesisModel(getStoredKey("synthesis-model") || "sonnet");
     setGithubPat(getStoredKey("github-pat"));
     setCustomTemplates(getCustomTemplates());
+    setCustomProfiles(getCustomProjectProfiles());
 
     // Load cache stats
     (async () => {
@@ -56,6 +69,7 @@ export default function SettingsPage() {
   const saveKeys = () => {
     localStorage.setItem("openrouter-api-key", openrouterKey);
     localStorage.setItem("anthropic-api-key", anthropicKey);
+    localStorage.setItem("model-prism-admin-token", adminToken);
     localStorage.setItem("synthesis-model", synthesisModel);
     localStorage.setItem("github-pat", githubPat);
     setSaved(true);
@@ -103,6 +117,31 @@ export default function SettingsPage() {
     localStorage.setItem("custom-templates", JSON.stringify(updated));
   };
 
+  const addProfile = () => {
+    if (!profileName.trim()) return;
+    const profile = createProjectProfile({
+      name: profileName.trim(),
+      description: profileDescription.trim() || "Custom project profile",
+      defaultRunPresetId: profileRunPreset,
+      defaultModelPreset: profileModelPreset,
+      defaultSynthesisModel: profileSynthesisModel,
+      defaultMaxCost: profileMaxCost,
+      defaultContextPackName: profileContextName.trim() || undefined,
+    });
+    const updated = [...customProfiles, profile];
+    setCustomProfiles(updated);
+    saveCustomProjectProfiles(updated);
+    setProfileName("");
+    setProfileDescription("");
+    setProfileContextName("");
+  };
+
+  const removeProfile = (id: string) => {
+    const updated = customProfiles.filter((profile) => profile.id !== id);
+    setCustomProfiles(updated);
+    saveCustomProjectProfiles(updated);
+  };
+
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
       <header className="border-b border-neutral-800 px-6 py-4">
@@ -144,6 +183,16 @@ export default function SettingsPage() {
                 value={anthropicKey}
                 onChange={(e) => setAnthropicKey(e.target.value)}
                 placeholder="sk-ant-..."
+                className="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600 focus:outline-none focus:border-violet-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-neutral-400 mb-1">Admin Token (optional, for protected history/save APIs)</label>
+              <input
+                type="password"
+                value={adminToken}
+                onChange={(e) => setAdminToken(e.target.value)}
+                placeholder="Only needed when MODEL_PRISM_ADMIN_TOKEN is set"
                 className="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600 focus:outline-none focus:border-violet-500"
               />
             </div>
@@ -257,6 +306,84 @@ export default function SettingsPage() {
         >
           {saved ? "Saved!" : "Save All Settings"}
         </button>
+
+        {/* Project Profiles */}
+        <section className="space-y-4">
+          <h2 className="text-sm font-semibold text-neutral-300">Project Profiles</h2>
+          <p className="text-xs text-neutral-500">
+            Profiles set the default run preset, model mix, synthesis model, budget, and context-pack hint for a project.
+          </p>
+
+          <div className="space-y-2">
+            {[...BUILT_IN_PROJECT_PROFILES, ...customProfiles].map((profile) => (
+              <div key={profile.id} className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-neutral-200">{profile.name}</p>
+                  <p className="text-xs text-neutral-500 mt-1">{profile.description}</p>
+                  <p className="text-[11px] text-neutral-600 mt-2">
+                    Preset: {profile.defaultRunPresetId} · Models: {profile.defaultModelPreset} · Synthesis: {profile.defaultSynthesisModel} · Budget: ${profile.defaultMaxCost.toFixed(2)}
+                  </p>
+                </div>
+                {profile.id.startsWith("profile_") && (
+                  <button onClick={() => removeProfile(profile.id)} className="text-xs text-red-400/60 hover:text-red-400 transition-colors">
+                    Remove
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="rounded-lg border border-dashed border-neutral-700 p-4 space-y-3">
+            <input
+              value={profileName}
+              onChange={(e) => setProfileName(e.target.value)}
+              placeholder="Project profile name"
+              className="w-full bg-neutral-900 border border-neutral-800 rounded px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600 focus:outline-none focus:border-violet-500"
+            />
+            <input
+              value={profileDescription}
+              onChange={(e) => setProfileDescription(e.target.value)}
+              placeholder="Short description"
+              className="w-full bg-neutral-900 border border-neutral-800 rounded px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600 focus:outline-none focus:border-violet-500"
+            />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <select value={profileRunPreset} onChange={(e) => setProfileRunPreset(e.target.value)} className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2 text-sm text-neutral-200 focus:outline-none focus:border-violet-500">
+                {DEFAULT_RUN_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+              </select>
+              <select value={profileModelPreset} onChange={(e) => setProfileModelPreset(e.target.value as ModelSelectionPreset)} className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2 text-sm text-neutral-200 focus:outline-none focus:border-violet-500">
+                <option value="frontier">Frontier</option>
+                <option value="diverse">Diverse</option>
+                <option value="all">All</option>
+                <option value="free">Free</option>
+              </select>
+              <select value={profileSynthesisModel} onChange={(e) => setProfileSynthesisModel(e.target.value as "sonnet" | "opus")} className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2 text-sm text-neutral-200 focus:outline-none focus:border-violet-500">
+                <option value="sonnet">Sonnet synthesis</option>
+                <option value="opus">Opus synthesis</option>
+              </select>
+              <input
+                type="number"
+                min="0"
+                step="0.25"
+                value={profileMaxCost}
+                onChange={(e) => setProfileMaxCost(Number(e.target.value || "0"))}
+                className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2 text-sm text-neutral-200 focus:outline-none focus:border-violet-500"
+              />
+            </div>
+            <input
+              value={profileContextName}
+              onChange={(e) => setProfileContextName(e.target.value)}
+              placeholder="Optional context pack name hint"
+              className="w-full bg-neutral-900 border border-neutral-800 rounded px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600 focus:outline-none focus:border-violet-500"
+            />
+            <button
+              onClick={addProfile}
+              disabled={!profileName.trim()}
+              className="px-4 py-2 rounded-lg bg-neutral-800 text-sm text-neutral-300 hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Add Profile
+            </button>
+          </div>
+        </section>
 
         {/* Default Prompt Templates */}
         <section className="space-y-4">

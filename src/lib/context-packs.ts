@@ -35,6 +35,7 @@ function migratePack(raw: Record<string, unknown>): ContextPack {
     brief: (raw.brief as string) || "",
     briefEnhanced: (raw.briefEnhanced as boolean) ?? false,
     selectedFiles: Array.isArray(raw.selectedFiles) ? raw.selectedFiles : [],
+    templateId: typeof raw.templateId === "string" ? raw.templateId : undefined,
     createdAt: (raw.createdAt as string) || new Date().toISOString(),
     updatedAt: (raw.updatedAt as string) || new Date().toISOString(),
   };

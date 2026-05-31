@@ -15,6 +15,7 @@ import {
   getCachedTree, setCachedTree, getCachedFileContent, setCachedFileContent,
   invalidateBranch, getCacheSize, clearAllCache,
 } from "@/lib/context-cache";
+import { CONTEXT_PACK_TEMPLATES, getContextTemplate, suggestFilesForContextTemplate } from "@/lib/context-templates";
 import { estimateTokens } from "@/lib/model-registry";
 import { cn } from "@/lib/utils";
 
@@ -278,6 +279,8 @@ export function ContextPanel({
 
   // Detected file references
   const [detectedFiles, setDetectedFiles] = useState<string[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [templateSuggestedFiles, setTemplateSuggestedFiles] = useState<string[]>([]);
 
   // Loading file contents
   const [loadingFiles, setLoadingFiles] = useState<Set<string>>(new Set());
@@ -285,12 +288,20 @@ export function ContextPanel({
   // Error state
   const [error, setError] = useState<string | null>(null);
 
-  // Import
+  // Import + local files
   const importRef = useRef<HTMLInputElement>(null);
+  const localFilesRef = useRef<HTMLInputElement>(null);
+  const localFolderRef = useRef<HTMLInputElement>(null);
 
   // Load packs on mount
   useEffect(() => {
     setPacks(getContextPacks());
+  }, []);
+
+  // Browser-only folder picker attributes are not part of React's standard input props.
+  useEffect(() => {
+    localFolderRef.current?.setAttribute("webkitdirectory", "");
+    localFolderRef.current?.setAttribute("directory", "");
   }, []);
 
   // Update rate limit display
@@ -414,12 +425,76 @@ export function ContextPanel({
   const handleBranchChange = useCallback(async (branch: string) => {
     setSelectedBranch(branch);
     setSelectedFiles(new Set());
+    setSelectedTemplateId("");
+    setTemplateSuggestedFiles([]);
     onFileContentsChange({});
     if (selectedRepo) {
       await invalidateBranch(selectedRepo, branch);
       await loadTree(selectedRepo, branch);
     }
   }, [selectedRepo, loadTree, onFileContentsChange]);
+
+  const collectRepoFiles = useCallback((): RepoFile[] => {
+    const allFiles: RepoFile[] = [];
+    function collectFiles(nodes: TreeNode[]) {
+      for (const n of nodes) {
+        if (n.type === "file") allFiles.push({ path: n.path, size: n.size, type: "file" });
+        if (n.children) collectFiles(n.children);
+      }
+    }
+    collectFiles(treeNodes);
+    return allFiles;
+  }, [treeNodes]);
+
+  const loadSelectedFileContents = useCallback(async (paths: string[]) => {
+    const nextContents = { ...fileContents };
+    const nextWarnings = new Map(secretWarnings);
+    const safePaths = paths.filter((path) => !isBlockedFile(path) && isAllowedExtension(path));
+    setLoadingFiles((current) => new Set([...current, ...safePaths.filter((path) => !nextContents[path])]));
+
+    for (const path of safePaths) {
+      if (nextContents[path]) continue;
+      try {
+        const cached = await getCachedFileContent(selectedRepo, selectedBranch, path);
+        if (cached) {
+          nextContents[path] = cached.content;
+          const secrets = scanForSecrets(cached.content);
+          if (secrets.length > 0) nextWarnings.set(path, secrets);
+          continue;
+        }
+        const result = await fetchFileContent(githubPat, selectedRepo, path, selectedBranch);
+        if (result.ok) {
+          nextContents[path] = result.content;
+          await setCachedFileContent(selectedRepo, selectedBranch, path, result.content, result.size);
+          const secrets = scanForSecrets(result.content);
+          if (secrets.length > 0) nextWarnings.set(path, secrets);
+        }
+      } catch { /* skip individual file failures */ }
+    }
+
+    setSecretWarnings(nextWarnings);
+    onFileContentsChange(nextContents);
+    setLoadingFiles((current) => {
+      const next = new Set(current);
+      safePaths.forEach((path) => next.delete(path));
+      return next;
+    });
+  }, [fileContents, githubPat, onFileContentsChange, secretWarnings, selectedBranch, selectedRepo]);
+
+  const handleApplyTemplate = useCallback(async (templateId: string) => {
+    const template = getContextTemplate(templateId);
+    if (!template) return;
+
+    const suggested = suggestFilesForContextTemplate(templateId, collectRepoFiles())
+      .filter((path) => !isBlockedFile(path) && isAllowedExtension(path));
+    setSelectedTemplateId(templateId);
+    setTemplateSuggestedFiles(suggested);
+    setShowTree(true);
+    setSelectedFiles((prev) => new Set([...prev, ...suggested]));
+    setBrief((current) => current.includes(template.briefNote) ? current : `${current.trim()}\n\n${template.briefNote}`.trim());
+    if (!packName.trim() && selectedRepo) setPackName(`${selectedRepo.split("/").pop()} ${template.name}`);
+    await loadSelectedFileContents(suggested);
+  }, [collectRepoFiles, loadSelectedFileContents, packName, selectedRepo]);
 
   const handleEnhance = useCallback(async () => {
     if (!anthropicKey || !selectedRepo || !selectedBranch) return;
@@ -428,16 +503,7 @@ export function ContextPanel({
 
     try {
       // Detect key files and fetch their contents
-      const allFiles: RepoFile[] = [];
-      function collectFiles(nodes: TreeNode[]) {
-        for (const n of nodes) {
-          if (n.type === "file") allFiles.push({ path: n.path, size: n.size, type: "file" });
-          if (n.children) collectFiles(n.children);
-        }
-      }
-      collectFiles(treeNodes);
-
-      const keyFilePaths = detectKeyFiles(allFiles);
+      const keyFilePaths = detectKeyFiles(collectRepoFiles());
       const keyContents: Record<string, string> = {};
 
       for (const path of keyFilePaths) {
@@ -462,7 +528,7 @@ export function ContextPanel({
       setEnhanceError((err as Error).message || "Enhancement failed");
     }
     setEnhancing(false);
-  }, [anthropicKey, selectedRepo, selectedBranch, treeNodes, brief, githubPat]);
+  }, [anthropicKey, selectedRepo, selectedBranch, collectRepoFiles, brief, githubPat]);
 
   const handleToggleFile = useCallback(async (path: string) => {
     setSelectedFiles((prev) => {
@@ -596,6 +662,7 @@ export function ContextPanel({
         brief,
         briefEnhanced: activePack.briefEnhanced || enhancing === false, // preserve if already enhanced
         selectedFiles: [...selectedFiles],
+        templateId: selectedTemplateId || activePack.templateId,
         updatedAt: new Date().toISOString(),
       }
       : {
@@ -607,6 +674,7 @@ export function ContextPanel({
         brief,
         briefEnhanced: false,
         selectedFiles: [...selectedFiles],
+        templateId: selectedTemplateId || undefined,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -617,7 +685,7 @@ export function ContextPanel({
     onContextEnabledChange(true);
     setPacks(getContextPacks());
     setMode("view");
-  }, [activePack, mode, packName, selectedRepo, selectedBranch, brief, selectedFiles, enhancing, onPackChange, onContextEnabledChange]);
+  }, [activePack, mode, packName, selectedRepo, selectedBranch, brief, selectedFiles, selectedTemplateId, enhancing, onPackChange, onContextEnabledChange]);
 
   const handleDeletePack = useCallback((id: string) => {
     deleteContextPack(id);
@@ -652,10 +720,14 @@ export function ContextPanel({
     setBrief(activePack.brief);
     setPackName(activePack.name);
     setSelectedFiles(new Set(activePack.selectedFiles));
+    setSelectedTemplateId(activePack.templateId || "");
+    setTemplateSuggestedFiles([]);
     setShowTree(activePack.selectedFiles.length > 0);
-    // Load tree for the pack's repo
-    loadTree(activePack.repo, activePack.branch);
-    if (!repos.length) loadRepos();
+    // Load tree for GitHub-backed packs only. Local packs are edited by replacing files.
+    if (activePack.repo !== "local") {
+      loadTree(activePack.repo, activePack.branch);
+      if (!repos.length) loadRepos();
+    }
   }, [activePack, loadTree, loadRepos, repos]);
 
   const handleExport = useCallback(() => {
@@ -688,6 +760,66 @@ export function ContextPanel({
     e.target.value = "";
   }, [handleSwitchPack]);
 
+  const handleLocalFiles = useCallback(async (files: FileList | null) => {
+    if (!files?.length) return;
+    setError(null);
+
+    const accepted = Array.from(files)
+      .map((file) => ({ file, path: (file.webkitRelativePath || file.name).replace(/\\/g, "/") }))
+      .filter(({ file, path }) => file.size <= 500_000 && !isBlockedFile(path) && isAllowedExtension(path))
+      .slice(0, 40);
+
+    if (!accepted.length) {
+      setError("No usable local files selected. Files may be too large, blocked, or unsupported.");
+      return;
+    }
+
+    const contents: Record<string, string> = {};
+    const warnings = new Map<string, string[]>();
+    const paths: string[] = [];
+
+    for (const { file, path } of accepted) {
+      try {
+        const text = await file.text();
+        contents[path] = text;
+        paths.push(path);
+        await setCachedFileContent("local", "local", path, text, file.size);
+        const secrets = scanForSecrets(text);
+        if (secrets.length > 0) warnings.set(path, secrets);
+      } catch { /* skip unreadable local files */ }
+    }
+
+    if (!paths.length) {
+      setError("Could not read the selected local files.");
+      return;
+    }
+
+    const pack: ContextPack = {
+      version: 1,
+      id: `pack_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      name: paths.length === 1 ? `Local: ${paths[0].split("/").pop()}` : `Local files (${paths.length})`,
+      repo: "local",
+      branch: "local",
+      brief: `LOCAL FILE CONTEXT\n\nThese files were selected from this computer and cached locally in the browser for Model Prism review context.\n\nFILES:\n${paths.map((path) => `- ${path}`).join("\n")}`,
+      briefEnhanced: false,
+      selectedFiles: paths,
+      templateId: "local-files",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    saveContextPack(pack);
+    setActivePackId(pack.id);
+    setSecretWarnings(warnings);
+    setSelectedFiles(new Set(paths));
+    setPacks(getContextPacks());
+    onFileContentsChange(contents);
+    onPackChange(pack);
+    onContextEnabledChange(true);
+    setCollapsed(false);
+    setMode("view");
+  }, [onContextEnabledChange, onFileContentsChange, onPackChange]);
+
   // Filtered tree for search
   const filteredTree = treeFilter
     ? treeNodes.map((n) => filterTreeNode(n, treeFilter.toLowerCase())).filter(Boolean) as TreeNode[]
@@ -702,18 +834,31 @@ export function ContextPanel({
 
   // --- Render ---
 
-  if (!githubPat) {
+  if (!githubPat && !activePack) {
     return (
       <div>
         <div className="flex items-center gap-3 mb-4">
           <div className="w-8 h-px bg-green" />
           <span className="overline text-green">Codebase Context</span>
         </div>
-        <div className="border border-dashed border-border p-4 text-center">
-          <p className="text-xs text-grey-30 mb-2">Connect GitHub to give models your codebase context</p>
+        <div className="border border-dashed border-border p-4 text-center space-y-3">
+          <div>
+            <p className="text-xs text-grey-30 mb-2">Attach local files now, or connect GitHub for repository context packs.</p>
+            <div className="flex items-center justify-center gap-2 flex-wrap">
+              <button onClick={() => localFilesRef.current?.click()} className="cta-text px-3 py-1.5 border border-green text-green hover:bg-green-light transition-colors duration-300">
+                Attach Files
+              </button>
+              <button onClick={() => localFolderRef.current?.click()} className="cta-text px-3 py-1.5 border border-border text-grey-50 hover:border-green hover:text-green transition-colors duration-300">
+                Attach Folder
+              </button>
+            </div>
+          </div>
           <a href="/settings" className="cta-text text-green hover:text-green-hover transition-colors duration-300">
             Add GitHub Token in Settings →
           </a>
+          {error && <p className="text-[10px] text-red-500">{error}</p>}
+          <input ref={localFilesRef} type="file" multiple onChange={(e) => { handleLocalFiles(e.target.files); e.target.value = ""; }} className="hidden" />
+          <input ref={localFolderRef} type="file" multiple onChange={(e) => { handleLocalFiles(e.target.files); e.target.value = ""; }} className="hidden" />
         </div>
       </div>
     );
@@ -856,7 +1001,7 @@ export function ContextPanel({
                 {selectedRepo && (
                   <div className="flex items-center gap-2 mt-1">
                     <span className="text-xs text-grey-60">{selectedRepo}</span>
-                    <button onClick={() => { setSelectedRepo(""); setTreeNodes([]); setBrief(""); }}
+                    <button onClick={() => { setSelectedRepo(""); setTreeNodes([]); setBrief(""); setSelectedTemplateId(""); setTemplateSuggestedFiles([]); }}
                       className="text-[10px] text-grey-30 hover:text-grey-60">✕</button>
                   </div>
                 )}
@@ -873,6 +1018,40 @@ export function ContextPanel({
                     <option key={b.name} value={b.name}>{b.name}</option>
                   ))}
                 </select>
+              )}
+
+              {/* Context templates */}
+              {treeNodes.length > 0 && (
+                <div className="border border-border bg-grey-5/40 p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-grey-30 uppercase tracking-wider">Context Template</span>
+                    {selectedTemplateId && (
+                      <span className="text-[9px] text-gold">
+                        {templateSuggestedFiles.length} suggested files
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                    {CONTEXT_PACK_TEMPLATES.map((template) => (
+                      <button
+                        key={template.id}
+                        onClick={() => handleApplyTemplate(template.id)}
+                        className={cn(
+                          "text-left border px-2.5 py-2 transition-colors",
+                          selectedTemplateId === template.id
+                            ? "border-green bg-green-light"
+                            : "border-border bg-white hover:border-green/50"
+                        )}
+                      >
+                        <span className="block text-xs font-medium text-grey-60">{template.name}</span>
+                        <span className="block text-[10px] text-grey-30 leading-relaxed mt-0.5">{template.description}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[9px] text-grey-30">
+                    Templates preselect likely useful files and add a review-focus note to the repo brief. You can still edit everything before saving.
+                  </p>
+                </div>
               )}
 
               {/* Brief editor */}
@@ -996,7 +1175,7 @@ export function ContextPanel({
                             selectedFiles={selectedFiles}
                             onToggleFile={handleToggleFile}
                             onExpandDir={handleExpandDir}
-                            suggestedFiles={new Set(detectedFiles)}
+                            suggestedFiles={new Set([...detectedFiles, ...templateSuggestedFiles])}
                             blockedTooltip={(path) => {
                               if (isBlockedFile(path)) return "Potentially sensitive file — blocked";
                               if (!isAllowedExtension(path)) return "Unsupported file type";
@@ -1040,8 +1219,20 @@ export function ContextPanel({
                 </div>
               )}
 
-              {/* Import button */}
-              <div className="flex gap-1.5">
+              {/* Import + local files */}
+              <div className="flex gap-2 flex-wrap items-center">
+                <button
+                  onClick={() => localFilesRef.current?.click()}
+                  className="cta-text text-grey-30 hover:text-green transition-colors"
+                >
+                  Attach Local Files
+                </button>
+                <button
+                  onClick={() => localFolderRef.current?.click()}
+                  className="cta-text text-grey-30 hover:text-green transition-colors"
+                >
+                  Attach Local Folder
+                </button>
                 <button
                   onClick={() => importRef.current?.click()}
                   className="cta-text text-grey-30 hover:text-green transition-colors"
@@ -1055,6 +1246,8 @@ export function ContextPanel({
                   onChange={handleImport}
                   className="hidden"
                 />
+                <input ref={localFilesRef} type="file" multiple onChange={(e) => { handleLocalFiles(e.target.files); e.target.value = ""; }} className="hidden" />
+                <input ref={localFolderRef} type="file" multiple onChange={(e) => { handleLocalFiles(e.target.files); e.target.value = ""; }} className="hidden" />
               </div>
 
               {/* Existing packs list */}

@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { SynthesisResult } from "@/lib/types";
+import { authHeaders } from "@/lib/client-api";
+import { buildPlanFrontmatter, getPlanStatus, PLAN_APPROVAL_STATUSES, PlanApprovalStatus, setPlanStatus } from "@/lib/plan-status";
 import { SynthesisView } from "@/components/synthesis-view";
 import { ResponseCard } from "@/components/response-card";
 
@@ -132,17 +134,20 @@ export default function RunPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [run, setRun] = useState<SavedRun | null>(null);
+  const [status, setStatus] = useState<PlanApprovalStatus>("council-reviewed");
+  const [copiedFrontmatter, setCopiedFrontmatter] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`/api/runs/${id}`)
+    fetch(`/api/runs/${id}`, { headers: authHeaders() })
       .then((r) => {
         if (!r.ok) throw new Error("Run not found");
         return r.json();
       })
       .then((data) => {
         setRun(data.run);
+        setStatus(getPlanStatus(data.run.id));
         setLoading(false);
       })
       .catch((e) => {
@@ -168,6 +173,27 @@ export default function RunPage() {
     const md = exportToMarkdown(run);
     const date = new Date(run.created_at + "Z").toISOString().slice(0, 10);
     downloadMarkdown(md, `model-prism-${date}-${run.id.slice(0, 8)}.md`);
+  };
+
+  const updateStatus = (next: PlanApprovalStatus) => {
+    if (!run) return;
+    setStatus(next);
+    setPlanStatus(run.id, next);
+  };
+
+  const copyFrontmatter = async () => {
+    if (!run) return;
+    const frontmatter = buildPlanFrontmatter({
+      status,
+      reviewedAt: new Date(run.created_at + "Z").toISOString(),
+      approvedAt: ["founder-approved", "ready", "executed"].includes(status) ? new Date().toISOString() : undefined,
+      reviewModel: run.synthesisModel,
+      roster: run.models,
+      criticality: status === "needs-changes" ? "high" : "medium",
+    });
+    await navigator.clipboard.writeText(frontmatter);
+    setCopiedFrontmatter(true);
+    window.setTimeout(() => setCopiedFrontmatter(false), 1600);
   };
 
   if (loading) {
@@ -224,6 +250,31 @@ export default function RunPage() {
       </header>
 
       <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+        {/* Plan Approval */}
+        <div className="border border-gold/30 bg-white p-5">
+          <div className="flex items-center justify-between gap-4 mb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-px bg-gold" />
+              <span className="overline text-gold">Plan Approval Workflow</span>
+            </div>
+            <button onClick={copyFrontmatter} className="cta-text px-3 py-1.5 border border-border text-grey-50 hover:border-gold hover:text-gold transition-colors duration-300">
+              {copiedFrontmatter ? "Copied" : "Copy Frontmatter"}
+            </button>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
+            {PLAN_APPROVAL_STATUSES.map((item) => (
+              <button
+                key={item.id}
+                onClick={() => updateStatus(item.id)}
+                className={`text-left border px-3 py-2 transition-colors ${status === item.id ? "border-gold bg-gold/10" : "border-border hover:border-gold/50"}`}
+              >
+                <span className="block text-xs font-medium text-grey-60">{item.label}</span>
+                <span className="block text-[9px] text-grey-30 mt-1 leading-snug">{item.description}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Run Info */}
         <div className="border border-border bg-white p-5">
           <div className="flex items-center gap-3 mb-3">
