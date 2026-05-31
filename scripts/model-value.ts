@@ -9,23 +9,12 @@
  *
  * Usage: tsx scripts/model-value.ts [--path <jsonl>] [--min-runs N]
  */
-import * as fs from "node:fs";
-import { loadTelemetry, aggregateModelValue, TELEMETRY_PATH, ModelValueRow, RunTelemetry } from "../src/lib/telemetry";
+import { aggregateModelValue, ModelValueRow } from "../src/lib/telemetry";
+import { loadTelemetry, TELEMETRY_PATH } from "../src/lib/telemetry-ledger";
 
 function arg(flag: string): string | null {
   const i = process.argv.indexOf(flag);
   return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : null;
-}
-
-function loadTelemetryPath(file: string): RunTelemetry[] {
-  if (!fs.existsSync(file)) return [];
-  const out: RunTelemetry[] = [];
-  for (const line of fs.readFileSync(file, "utf-8").split("\n")) {
-    const t = line.trim();
-    if (!t) continue;
-    try { out.push(JSON.parse(t) as RunTelemetry); } catch { /* skip corrupt lines */ }
-  }
-  return out;
 }
 
 function fmtCost(n: number): string {
@@ -43,7 +32,7 @@ function main(): void {
   const path = arg("--path") || undefined;
   const minRuns = Number.parseInt(arg("--min-runs") || "1", 10);
 
-  const runs = path ? loadTelemetryPath(path) : loadTelemetry();
+  const runs = loadTelemetry(path);
   if (runs.length === 0) {
     console.log(`No telemetry yet at ${path || TELEMETRY_PATH}.\nRun some plan reviews — each appends one record — then re-run this report.`);
     return;

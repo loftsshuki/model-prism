@@ -15,7 +15,7 @@ It is used both as:
 - Provides run presets for common review modes
 - Scores synthesis quality and extracts copyable action checklists
 - Supports a second-pass critique of the synthesis
-- Records telemetry for a model leaderboard, failure diagnostics, and roster recommendations
+- Records database-backed telemetry for a model leaderboard, failure diagnostics, and roster recommendations
 - Provides context-pack templates and local file/folder context
 - Loads GitHub PR diffs into the code-review flow
 - Adds plan approval status/frontmatter and a hook dashboard

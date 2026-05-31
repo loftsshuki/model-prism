@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from "bun:test";
 import * as fs from "node:fs";
-import { buildRunTelemetry, appendRunTelemetry, loadTelemetry, aggregateModelValue, analyzeModelFailures, recommendRosterChanges, TELEMETRY_PATH } from "./telemetry";
+import { buildRunTelemetry, aggregateModelValue, analyzeModelFailures, recommendRosterChanges } from "./telemetry";
+import { appendRunTelemetry, loadTelemetry, TELEMETRY_PATH } from "./telemetry-ledger";
 import { ModelInfo, ModelResponse, SynthesisResult } from "./types";
 
 const USED: ModelInfo[] = [

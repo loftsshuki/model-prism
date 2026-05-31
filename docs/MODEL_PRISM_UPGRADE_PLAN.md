@@ -198,7 +198,7 @@ Keep this manual approval only.
 
 ## Technical debt / revisit notes
 
-- Turbopack currently warns during `next build` because `/api/telemetry` reads/writes the local JSONL telemetry ledger. Build succeeds and this is acceptable for local/dev usage. Revisit before deployment: move telemetry into the database or another server-safe store.
+- Resolved: web telemetry now stores records in the database-backed `run_telemetry` table so `next build` no longer warns about filesystem tracing. CLI plan reviews still keep a local JSONL ledger via `src/lib/telemetry-ledger.ts` for offline reports.
 
 ---
 

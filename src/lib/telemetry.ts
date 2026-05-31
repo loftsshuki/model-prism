@@ -1,14 +1,8 @@
-import * as path from "node:path";
-import * as fs from "node:fs";
 import { ModelInfo, ModelResponse, SynthesisResult } from "./types";
 
-// Per-run, per-model telemetry. Every council review appends one line to a global JSONL
-// ledger so the `model-value` report can answer, with EVIDENCE rather than vibes, which
-// council members earn their slot: who surfaces unique insight (the "gold"), who covers
-// the themes, who fails/falls back, and at what cost. The ledger lives in the user's home
-// (cross-repo, never committed) — it's runtime data, not source.
-export const TELEMETRY_PATH =
-  process.env.MODEL_PRISM_TELEMETRY || path.join(process.cwd(), ".model-prism", "model-telemetry.jsonl");
+// Per-run, per-model telemetry. This module intentionally stays pure (no filesystem
+// imports) so it can be used by both browser/client-adjacent code and Next.js routes
+// without triggering server bundle tracing warnings.
 
 export interface ModelRunTelemetry {
   id: string;
@@ -129,27 +123,6 @@ export function buildRunTelemetry(a: BuildRunArgs): RunTelemetry {
     durationSec: a.durationSec,
     models,
   };
-}
-
-// Best-effort append — telemetry must NEVER break a review. Caller wraps in try/catch too.
-export function appendRunTelemetry(record: RunTelemetry): void {
-  fs.mkdirSync(path.dirname(TELEMETRY_PATH), { recursive: true });
-  fs.appendFileSync(TELEMETRY_PATH, JSON.stringify(record) + "\n", "utf-8");
-}
-
-export function loadTelemetry(): RunTelemetry[] {
-  if (!fs.existsSync(TELEMETRY_PATH)) return [];
-  const out: RunTelemetry[] = [];
-  for (const line of fs.readFileSync(TELEMETRY_PATH, "utf-8").split("\n")) {
-    const t = line.trim();
-    if (!t) continue;
-    try {
-      out.push(JSON.parse(t) as RunTelemetry);
-    } catch {
-      /* skip a corrupt line rather than fail the whole report */
-    }
-  }
-  return out;
 }
 
 export interface ModelValueRow {

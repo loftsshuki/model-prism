@@ -1,33 +1,55 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { requireAdminToken } from "@/lib/api-auth";
+import { listRunTelemetry, saveRunTelemetry } from "@/lib/db";
 import {
   aggregateModelValue,
   analyzeModelFailures,
-  appendRunTelemetry,
   buildRunTelemetry,
-  loadTelemetry,
   recommendRosterChanges,
-  TELEMETRY_PATH,
+  RunTelemetry,
 } from "@/lib/telemetry";
 import { ModelInfo, ModelResponse, SynthesisResult } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function parseTelemetryRows(rows: Array<{ record: unknown }>): RunTelemetry[] {
+  const runs: RunTelemetry[] = [];
+  for (const row of rows) {
+    try {
+      if (typeof row.record === "string") runs.push(JSON.parse(row.record) as RunTelemetry);
+    } catch {
+      // Skip corrupt rows rather than breaking the dashboard.
+    }
+  }
+  return runs;
+}
+
 export async function GET(req: NextRequest) {
   const unauthorized = requireAdminToken(req);
   if (unauthorized) return unauthorized;
 
-  const runs = loadTelemetry();
-  const leaderboard = aggregateModelValue(runs);
-  return NextResponse.json({
-    telemetryPath: TELEMETRY_PATH,
-    runCount: runs.length,
-    leaderboard,
-    diagnostics: analyzeModelFailures(leaderboard),
-    recommendations: recommendRosterChanges(leaderboard),
-  });
+  try {
+    const runs = parseTelemetryRows(await listRunTelemetry());
+    const leaderboard = aggregateModelValue(runs);
+    return NextResponse.json({
+      telemetryPath: "database:run_telemetry",
+      runCount: runs.length,
+      leaderboard,
+      diagnostics: analyzeModelFailures(leaderboard),
+      recommendations: recommendRosterChanges(leaderboard),
+    });
+  } catch (error) {
+    return NextResponse.json({
+      telemetryPath: "database:run_telemetry",
+      runCount: 0,
+      leaderboard: [],
+      diagnostics: [],
+      recommendations: [],
+      error: error instanceof Error ? error.message : "Failed to load telemetry",
+    });
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -64,6 +86,10 @@ export async function POST(req: NextRequest) {
     usedModels: body.usedModels,
   });
 
-  appendRunTelemetry(record);
-  return NextResponse.json({ ok: true });
+  try {
+    await saveRunTelemetry(JSON.stringify(record));
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Failed to save telemetry" }, { status: 500 });
+  }
 }

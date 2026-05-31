@@ -29,7 +29,8 @@ import { ModelInfo, ModelResponse, SynthesisResult } from "../src/lib/types";
 // Council rosters live in their own module so the freshness checker
 // (scripts/check-roster-freshness.ts) reads the exact rosters that run here.
 import { ROSTERS, resolveAutoRoster, AUTO_THRESHOLD_TOKENS } from "../src/lib/rosters";
-import { buildRunTelemetry, appendRunTelemetry } from "../src/lib/telemetry";
+import { buildRunTelemetry } from "../src/lib/telemetry";
+import { appendRunTelemetry } from "../src/lib/telemetry-ledger";
 import { buildReviewRecord, appendReviewRecord, writeBrainDigest } from "../src/lib/review-ledger";
 
 // --- The review prompt ---

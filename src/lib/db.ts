@@ -61,6 +61,14 @@ export async function initDb() {
     )
   `;
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS run_telemetry (
+      id SERIAL PRIMARY KEY,
+      record TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+
   initialized = true;
 }
 
@@ -143,6 +151,26 @@ export async function getRun(id: string) {
     synthesis: syntheses[0] ? JSON.parse(syntheses[0].result as string) : null,
     synthesisModel: syntheses[0]?.model_used ?? null,
   };
+}
+
+export async function saveRunTelemetry(record: string) {
+  await initDb();
+  const sql = getClient();
+  await sql`
+    INSERT INTO run_telemetry (record)
+    VALUES (${record})
+  `;
+}
+
+export async function listRunTelemetry(limit = 500): Promise<Array<{ record: string }>> {
+  await initDb();
+  const sql = getClient();
+  const rows = await sql`
+    SELECT record FROM run_telemetry
+    ORDER BY created_at DESC
+    LIMIT ${limit}
+  `;
+  return rows.map((row) => ({ record: String(row.record ?? "") }));
 }
 
 export async function listRuns() {
