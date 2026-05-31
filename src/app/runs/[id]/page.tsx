@@ -3,8 +3,10 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { SynthesisResult } from "@/lib/types";
-import { authHeaders } from "@/lib/client-api";
+import { authHeaders, jsonHeaders } from "@/lib/client-api";
 import { buildPlanFrontmatter, getPlanStatus, PLAN_APPROVAL_STATUSES, PlanApprovalStatus, setPlanStatus } from "@/lib/plan-status";
+import { buildActionChecklistMarkdown, extractActionItems } from "@/lib/review-analysis";
+import { buildGithubReviewMarkdown, parseDiffFiles } from "@/lib/pr-review";
 import { SynthesisView } from "@/components/synthesis-view";
 import { ResponseCard } from "@/components/response-card";
 
@@ -145,9 +147,16 @@ export default function RunPage() {
         if (!r.ok) throw new Error("Run not found");
         return r.json();
       })
-      .then((data) => {
+      .then(async (data) => {
         setRun(data.run);
         setStatus(getPlanStatus(data.run.id));
+        try {
+          const statusRes = await fetch(`/api/plan-status?runId=${encodeURIComponent(data.run.id)}`, { headers: authHeaders() });
+          if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            if (statusData.status) setStatus(statusData.status);
+          }
+        } catch { /* local fallback already set */ }
         setLoading(false);
       })
       .catch((e) => {
@@ -175,10 +184,33 @@ export default function RunPage() {
     downloadMarkdown(md, `model-prism-${date}-${run.id.slice(0, 8)}.md`);
   };
 
-  const updateStatus = (next: PlanApprovalStatus) => {
+  const handleExportGithubReview = () => {
+    if (!run) return;
+    const files = parseDiffFiles(run.content);
+    const md = buildGithubReviewMarkdown({
+      title: run.content.match(/PR: #\d+\s+—\s+(.+)/)?.[1],
+      url: run.content.match(/URL:\s*(.+)/)?.[1] || "",
+      synthesis: run.synthesis?.masterDocument,
+      actionChecklist: run.synthesis ? buildActionChecklistMarkdown(extractActionItems(run.synthesis)) : undefined,
+      files,
+    });
+    const date = new Date(run.created_at + "Z").toISOString().slice(0, 10);
+    downloadMarkdown(md, `github-review-${date}-${run.id.slice(0, 8)}.md`);
+  };
+
+  const updateStatus = async (next: PlanApprovalStatus) => {
     if (!run) return;
     setStatus(next);
     setPlanStatus(run.id, next);
+    await fetch("/api/plan-status", {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        runId: run.id,
+        status: next,
+        approvedAt: ["founder-approved", "ready", "executed"].includes(next) ? new Date().toISOString() : null,
+      }),
+    }).catch(() => {});
   };
 
   const copyFrontmatter = async () => {
@@ -235,6 +267,12 @@ export default function RunPage() {
               className="cta-text px-4 py-2 border border-cream/30 text-cream/70 hover:text-cream hover:border-cream/60 transition-colors duration-300"
             >
               Export .md
+            </button>
+            <button
+              onClick={handleExportGithubReview}
+              className="cta-text px-4 py-2 border border-cream/30 text-cream/70 hover:text-cream hover:border-cream/60 transition-colors duration-300"
+            >
+              GitHub Review
             </button>
             <button
               onClick={handleRerun}

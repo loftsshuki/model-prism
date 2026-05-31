@@ -10,6 +10,7 @@ import { fanOut } from "@/lib/fan-out";
 import { SYNTHESIS_MODEL_IDS, synthesizeDirect } from "@/lib/synthesis";
 import { getContextPacks, getActivePackId, buildContextString } from "@/lib/context-packs";
 import { jsonHeaders } from "@/lib/client-api";
+import { parseDiffFiles, summarizeDiffFiles } from "@/lib/pr-review";
 import { getCachedFileContent } from "@/lib/context-cache";
 import { ModelPicker } from "@/components/model-picker";
 import { ResponseCard } from "@/components/response-card";
@@ -74,6 +75,7 @@ export default function Home() {
   const [prUrl, setPrUrl] = useState("");
   const [prLoading, setPrLoading] = useState(false);
   const [prError, setPrError] = useState<string | null>(null);
+  const [prSummary, setPrSummary] = useState<{ fileCount: number; additions: number; deletions: number; riskyFiles: Array<{ path: string }> } | null>(null);
   const appliedInitialProfileRef = useRef(false);
 
   // --- Context Pack state ---
@@ -291,6 +293,8 @@ export default function Home() {
       const diffRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${pullNumber}`, { headers });
       if (!diffRes.ok) throw new Error(`GitHub returned ${diffRes.status}. Check token access or PR URL.`);
       const diff = await diffRes.text();
+      const files = parseDiffFiles(diff);
+      setPrSummary(summarizeDiffFiles(files));
       const metaHeaders: Record<string, string> = { Accept: "application/vnd.github+json" };
       if (githubPat) metaHeaders.Authorization = `Bearer ${githubPat}`;
       const meta = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${pullNumber}`, { headers: metaHeaders }).then((r) => r.ok ? r.json() : null).catch(() => null);
@@ -755,6 +759,14 @@ Produce a revised masterDocument that starts with a direct verdict: APPROVE, APP
                 </button>
               </div>
               {prError && <p className="text-[10px] text-red-600">{prError}</p>}
+              {prSummary && (
+                <div className="text-[10px] text-grey-40 bg-grey-5 border border-border px-3 py-2 leading-relaxed">
+                  Loaded {prSummary.fileCount} files (+{prSummary.additions}/-{prSummary.deletions})
+                  {prSummary.riskyFiles.length > 0 && (
+                    <span className="text-gold"> · Risk-sensitive: {prSummary.riskyFiles.slice(0, 3).map((file) => file.path).join(", ")}</span>
+                  )}
+                </div>
+              )}
               <p className="text-[10px] text-grey-30 leading-relaxed">
                 Loads the PR diff into Content and switches to the Code Review preset. Private repos need a GitHub token in Settings.
               </p>

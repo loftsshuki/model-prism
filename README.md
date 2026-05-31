@@ -17,8 +17,8 @@ It is used both as:
 - Supports a second-pass critique of the synthesis
 - Records database-backed telemetry for a model leaderboard, failure diagnostics, and roster recommendations
 - Provides context-pack templates and local file/folder context
-- Loads GitHub PR diffs into the code-review flow
-- Adds plan approval status/frontmatter and a hook dashboard
+- Loads GitHub PR diffs into the code-review flow and exports GitHub-ready review markdown
+- Adds database-backed plan approval status/frontmatter and a live hook dashboard
 - Warns before runs exceed a configured cost budget
 - Falls back from flaky free models to reliable paid equivalents
 - Synthesizes results with Claude Sonnet or Opus

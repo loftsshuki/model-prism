@@ -58,6 +58,9 @@ Protected routes:
 - `POST /api/save-response`
 - `POST /api/synthesize`
 - `POST /api/synthesize/save`
+- `GET/POST /api/telemetry`
+- `GET/POST /api/plan-status`
+- `GET/POST /api/hook-jobs`
 
 If `MODEL_PRISM_ADMIN_TOKEN` is not set, routes remain open for local/internal use.
 
@@ -137,6 +140,31 @@ Legacy server-side routes still exist for compatibility:
 
 Do not delete them until production usage is confirmed to be zero.
 
+## Web telemetry and hook jobs
+
+Web telemetry is stored in Postgres in `run_telemetry` and powers `/models` plus `/hooks`.
+
+Hook workers can update dashboard state with:
+
+```http
+POST /api/hook-jobs
+x-model-prism-token: <token if configured>
+content-type: application/json
+
+{
+  "id": "stable-job-id",
+  "planFile": "docs/plans/my-plan.md",
+  "status": "pending | running | completed | failed",
+  "runId": "optional-run-id",
+  "cost": 0.42,
+  "models": ["model-a", "model-b"],
+  "error": "optional failure text",
+  "logs": "optional log excerpt"
+}
+```
+
+CLI plan reviews still keep an offline JSONL ledger via `src/lib/telemetry-ledger.ts` for `npm run model-value`.
+
 ## Routine maintenance
 
 Weekly or before important plan reviews:
@@ -149,8 +177,11 @@ npm run build
 
 Before public deployment:
 
-1. Set `MODEL_PRISM_ADMIN_TOKEN`.
-2. Verify Settings can save the admin token.
-3. Confirm History still loads.
-4. Confirm new runs save responses and synthesis.
-5. Confirm no sensitive keys are committed.
+1. Set `DATABASE_URL`.
+2. Set `MODEL_PRISM_ADMIN_TOKEN`.
+3. Verify Settings can save the admin token.
+4. Confirm History still loads.
+5. Confirm new runs save responses, synthesis, telemetry, and plan status.
+6. Confirm `/models` and `/hooks` load.
+7. Confirm no sensitive keys are committed.
+8. Confirm GitHub Actions CI passes.

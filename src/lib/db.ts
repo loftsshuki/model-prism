@@ -69,6 +69,30 @@ export async function initDb() {
     )
   `;
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS plan_statuses (
+      run_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      approved_at TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS hook_jobs (
+      id TEXT PRIMARY KEY,
+      plan_file TEXT NOT NULL,
+      status TEXT NOT NULL,
+      run_id TEXT,
+      cost REAL DEFAULT 0,
+      models TEXT,
+      error TEXT,
+      logs TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+
   initialized = true;
 }
 
@@ -171,6 +195,63 @@ export async function listRunTelemetry(limit = 500): Promise<Array<{ record: str
     LIMIT ${limit}
   `;
   return rows.map((row) => ({ record: String(row.record ?? "") }));
+}
+
+export async function getPlanStatus(runId: string) {
+  await initDb();
+  const sql = getClient();
+  const rows = await sql`SELECT * FROM plan_statuses WHERE run_id = ${runId}`;
+  return rows[0] ?? null;
+}
+
+export async function savePlanStatus(runId: string, status: string, approvedAt?: string | null) {
+  await initDb();
+  const sql = getClient();
+  await sql`
+    INSERT INTO plan_statuses (run_id, status, approved_at, updated_at)
+    VALUES (${runId}, ${status}, ${approvedAt ?? null}, NOW())
+    ON CONFLICT (run_id) DO UPDATE SET
+      status = EXCLUDED.status,
+      approved_at = EXCLUDED.approved_at,
+      updated_at = NOW()
+  `;
+}
+
+export async function listHookJobs(limit = 100) {
+  await initDb();
+  const sql = getClient();
+  return sql`
+    SELECT * FROM hook_jobs
+    ORDER BY created_at DESC
+    LIMIT ${limit}
+  `;
+}
+
+export async function upsertHookJob(input: {
+  id: string;
+  planFile: string;
+  status: string;
+  runId?: string | null;
+  cost?: number | null;
+  models?: string[] | null;
+  error?: string | null;
+  logs?: string | null;
+}) {
+  await initDb();
+  const sql = getClient();
+  await sql`
+    INSERT INTO hook_jobs (id, plan_file, status, run_id, cost, models, error, logs, updated_at)
+    VALUES (${input.id}, ${input.planFile}, ${input.status}, ${input.runId ?? null}, ${input.cost ?? 0}, ${input.models ? JSON.stringify(input.models) : null}, ${input.error ?? null}, ${input.logs ?? null}, NOW())
+    ON CONFLICT (id) DO UPDATE SET
+      plan_file = EXCLUDED.plan_file,
+      status = EXCLUDED.status,
+      run_id = EXCLUDED.run_id,
+      cost = EXCLUDED.cost,
+      models = EXCLUDED.models,
+      error = EXCLUDED.error,
+      logs = EXCLUDED.logs,
+      updated_at = NOW()
+  `;
 }
 
 export async function listRuns() {

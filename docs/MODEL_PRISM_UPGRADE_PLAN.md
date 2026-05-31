@@ -199,6 +199,7 @@ Keep this manual approval only.
 ## Technical debt / revisit notes
 
 - Resolved: web telemetry now stores records in the database-backed `run_telemetry` table so `next build` no longer warns about filesystem tracing. CLI plan reviews still keep a local JSONL ledger via `src/lib/telemetry-ledger.ts` for offline reports.
+- Hardening pass completed: live hook jobs API/dashboard, DB-backed plan statuses, GitHub-ready PR review export, local context replacement controls, synthesis compare tests, CI workflow, and expanded deployment docs.
 
 ---
 

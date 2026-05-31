@@ -11,36 +11,66 @@ interface TelemetryResponse {
   telemetryPath: string;
 }
 
+interface HookJob {
+  id: string;
+  plan_file: string;
+  status: "pending" | "running" | "completed" | "failed" | string;
+  run_id?: string | null;
+  cost?: number | null;
+  models?: string | null;
+  error?: string | null;
+  logs?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export default function HooksDashboardPage() {
   const [data, setData] = useState<TelemetryResponse | null>(null);
+  const [jobs, setJobs] = useState<HookJob[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const load = async () => {
+    setLoading(true);
+    const [telemetry, hookJobs] = await Promise.all([
+      fetch("/api/telemetry", { headers: authHeaders() }).then((r) => r.json()),
+      fetch("/api/hook-jobs", { headers: authHeaders() }).then((r) => r.json()).catch(() => ({ jobs: [] })),
+    ]);
+    setData(telemetry);
+    setJobs(hookJobs.jobs || []);
+    setLoading(false);
+  };
+
   useEffect(() => {
-    fetch("/api/telemetry", { headers: authHeaders() })
-      .then((r) => r.json())
-      .then(setData)
-      .finally(() => setLoading(false));
+    load();
+    const interval = window.setInterval(load, 15000);
+    return () => window.clearInterval(interval);
   }, []);
 
   const stats = useMemo(() => {
     const models = data?.leaderboard || [];
     return {
-      completed: data?.runCount || 0,
+      completed: jobs.filter((job) => job.status === "completed").length || data?.runCount || 0,
+      pending: jobs.filter((job) => job.status === "pending").length,
+      running: jobs.filter((job) => job.status === "running").length,
+      failed: jobs.filter((job) => job.status === "failed").length,
       failedModels: models.reduce((sum, model) => sum + model.errors, 0),
-      totalCost: models.reduce((sum, model) => sum + model.totalCost, 0),
+      totalCost: models.reduce((sum, model) => sum + model.totalCost, 0) + jobs.reduce((sum, job) => sum + Number(job.cost || 0), 0),
       modelsUsed: models.length,
     };
-  }, [data]);
+  }, [data, jobs]);
 
   return (
     <main className="min-h-screen bg-neutral-950 text-neutral-100 px-6 py-8">
       <div className="max-w-6xl mx-auto space-y-8">
-        <header>
-          <a href="/" className="text-xs uppercase tracking-[0.2em] text-neutral-500 hover:text-neutral-300">← Back</a>
-          <h1 className="mt-4 text-3xl font-semibold tracking-tight">Plan-Review Hook Dashboard</h1>
-          <p className="mt-2 text-sm text-neutral-500">
-            Lightweight cockpit for council/hook activity. Today it summarizes completed Model Prism reviews; future hook runners can post pending/running jobs here.
-          </p>
+        <header className="flex items-start justify-between gap-4">
+          <div>
+            <a href="/" className="text-xs uppercase tracking-[0.2em] text-neutral-500 hover:text-neutral-300">← Back</a>
+            <h1 className="mt-4 text-3xl font-semibold tracking-tight">Plan-Review Hook Dashboard</h1>
+            <p className="mt-2 text-sm text-neutral-500">
+              Live hook/council activity. Hook workers can POST jobs to <code>/api/hook-jobs</code>; this page refreshes automatically.
+            </p>
+          </div>
+          <button onClick={load} className="rounded-lg border border-neutral-800 px-4 py-2 text-sm text-neutral-300 hover:border-neutral-600">Refresh</button>
         </header>
 
         {loading ? (
@@ -48,26 +78,39 @@ export default function HooksDashboardPage() {
         ) : (
           <>
             <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <Metric label="Completed reviews" value={stats.completed} />
+              <Metric label="Pending" value={stats.pending} />
+              <Metric label="Running" value={stats.running} />
+              <Metric label="Completed" value={stats.completed} />
+              <Metric label="Failed" value={stats.failed} />
+            </section>
+
+            <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <Metric label="Models tracked" value={stats.modelsUsed} />
               <Metric label="Model failures" value={stats.failedModels} />
               <Metric label="Tracked cost" value={`$${stats.totalCost.toFixed(4)}`} />
+              <Metric label="Telemetry runs" value={data?.runCount || 0} />
             </section>
 
-            <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              <StatusColumn title="Pending" empty="No pending hook reviews." />
-              <StatusColumn title="Running" empty="No reviews running." />
-              <StatusColumn title="Completed" empty={stats.completed ? `${stats.completed} completed reviews are available in History and Models.` : "No completed reviews yet."} />
+            <section className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+              <StatusColumn title="Pending" jobs={jobs.filter((job) => job.status === "pending")} empty="No pending hook reviews." />
+              <StatusColumn title="Running" jobs={jobs.filter((job) => job.status === "running")} empty="No reviews running." />
+              <StatusColumn title="Completed" jobs={jobs.filter((job) => job.status === "completed")} empty="No completed hook jobs yet." />
+              <StatusColumn title="Failed" jobs={jobs.filter((job) => job.status === "failed")} empty="No failed hook jobs." />
             </section>
 
             <section className="rounded-xl border border-neutral-800 bg-neutral-900 p-5 space-y-3">
-              <h2 className="text-lg font-semibold">Manual hook integration checklist</h2>
-              <ul className="space-y-2 text-sm text-neutral-400">
-                <li>- Use Model Prism for review before executing critical plans.</li>
-                <li>- Keep hook execution manual/approved until trust controls are stronger.</li>
-                <li>- Export frontmatter from run detail pages for reviewed plans.</li>
-                <li>- Revisit this dashboard when adding background hook workers.</li>
-              </ul>
+              <h2 className="text-lg font-semibold">Hook worker contract</h2>
+              <pre className="overflow-x-auto rounded-lg bg-neutral-950 p-4 text-xs text-neutral-400">{`POST /api/hook-jobs
+{
+  "id": "plan-file-hash-or-job-id",
+  "planFile": "docs/plans/my-plan.md",
+  "status": "pending | running | completed | failed",
+  "runId": "optional-model-prism-run-id",
+  "cost": 0.1234,
+  "models": ["model-a", "model-b"],
+  "error": "optional failure text",
+  "logs": "optional log excerpt"
+}`}</pre>
             </section>
 
             {data?.recommendations?.length ? (
@@ -100,11 +143,24 @@ function Metric({ label, value }: { label: string; value: string | number }) {
   );
 }
 
-function StatusColumn({ title, empty }: { title: string; empty: string }) {
+function StatusColumn({ title, jobs, empty }: { title: string; jobs: HookJob[]; empty: string }) {
   return (
-    <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-5 min-h-40">
+    <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-5 min-h-44">
       <h2 className="text-sm font-semibold text-neutral-300">{title}</h2>
-      <p className="mt-4 text-sm text-neutral-500">{empty}</p>
+      {jobs.length === 0 ? (
+        <p className="mt-4 text-sm text-neutral-500">{empty}</p>
+      ) : (
+        <div className="mt-4 space-y-3">
+          {jobs.slice(0, 8).map((job) => (
+            <div key={job.id} className="rounded-lg border border-neutral-800 bg-neutral-950/60 p-3">
+              <p className="truncate text-sm text-neutral-200" title={job.plan_file}>{job.plan_file}</p>
+              <p className="mt-1 text-[11px] text-neutral-500">{new Date(job.updated_at).toLocaleString()}</p>
+              {job.run_id && <a href={`/runs/${job.run_id}`} className="mt-2 block text-xs text-violet-300 hover:text-violet-200">Open run →</a>}
+              {job.error && <p className="mt-2 text-xs text-red-300">{job.error}</p>}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

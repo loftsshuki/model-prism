@@ -933,10 +933,17 @@ export function ContextPanel({
                   className="cta-text px-3 py-1.5 border border-border text-grey-50 hover:border-green hover:text-green transition-colors duration-300">
                   Edit
                 </button>
-                <button onClick={() => { setMode("create"); loadRepos(); }}
-                  className="cta-text px-3 py-1.5 border border-border text-grey-50 hover:border-green hover:text-green transition-colors duration-300">
-                  Switch
-                </button>
+                {activePack.repo === "local" ? (
+                  <button onClick={() => localFilesRef.current?.click()}
+                    className="cta-text px-3 py-1.5 border border-border text-grey-50 hover:border-green hover:text-green transition-colors duration-300">
+                    Replace Files
+                  </button>
+                ) : (
+                  <button onClick={() => { setMode("create"); loadRepos(); }}
+                    className="cta-text px-3 py-1.5 border border-border text-grey-50 hover:border-green hover:text-green transition-colors duration-300">
+                    Switch
+                  </button>
+                )}
                 <button onClick={handleExport}
                   className="cta-text px-3 py-1.5 border border-border text-grey-50 hover:border-green hover:text-green transition-colors duration-300">
                   Export
@@ -945,6 +952,9 @@ export function ContextPanel({
                   className="cta-text px-3 py-1.5 border border-border text-grey-40 hover:border-red-300 hover:text-red-500 transition-colors duration-300">
                   Disable
                 </button>
+                {activePack.repo === "local" && (
+                  <input ref={localFilesRef} type="file" multiple onChange={(e) => { handleLocalFiles(e.target.files); e.target.value = ""; }} className="hidden" />
+                )}
               </div>
 
               {/* Other packs */}
