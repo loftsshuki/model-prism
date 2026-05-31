@@ -30,6 +30,7 @@ import { ModelInfo, ModelResponse, SynthesisResult } from "../src/lib/types";
 // (scripts/check-roster-freshness.ts) reads the exact rosters that run here.
 import { ROSTERS, resolveAutoRoster, AUTO_THRESHOLD_TOKENS } from "../src/lib/rosters";
 import { buildRunTelemetry, appendRunTelemetry } from "../src/lib/telemetry";
+import { buildReviewRecord, appendReviewRecord, writeBrainDigest } from "../src/lib/review-ledger";
 
 // --- The review prompt ---
 
@@ -591,6 +592,27 @@ async function reviewPlan(
     }));
   } catch (e) {
     console.error(`  (telemetry not recorded: ${e instanceof Error ? e.message : e})`);
+  }
+
+  // Capture review FINDINGS for the `review-digest` report, and (opt-in, wherever a Brain
+  // vault resolves) mirror a wikilinked digest into the vault for cross-review analysis.
+  // Best-effort: must never fail a completed review.
+  try {
+    const record = buildReviewRecord({
+      ts: new Date().toISOString(),
+      plan: path.basename(planPath),
+      contextRepo: context.repoName,
+      roster: args.roster ?? "default",
+      synthesisModel: SYNTHESIS_MODEL_IDS.opus,
+      durationSec,
+      synthesis,
+      responses,
+    });
+    appendReviewRecord(record);
+    const brainPath = writeBrainDigest(record);
+    if (brainPath) console.log(`  Review digest → Brain: ${brainPath}`);
+  } catch (e) {
+    console.error(`  (review findings not recorded: ${e instanceof Error ? e.message : e})`);
   }
 
   return { skipped: false, reviewPath: outputPath };
