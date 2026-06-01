@@ -9,8 +9,12 @@ import { ModelResponse, SynthesisResult } from "./types";
 // Append-only JSONL so `review-digest` can surface patterns across every review, and
 // (opt-in) a wikilinked digest is mirrored into the Brain vault so findings are searchable
 // alongside everything else.
+//
+// Co-located with the telemetry ledger under the gitignored `.model-prism/` (cwd-relative),
+// matching src/lib/telemetry-ledger.ts — so model-value and review-digest read from one
+// place. This is the local CLI/offline store; the web app aggregates via the database.
 export const REVIEW_LEDGER_PATH =
-  process.env.MODEL_PRISM_REVIEW_LEDGER || path.join(os.homedir(), ".model-prism", "review-ledger.jsonl");
+  process.env.MODEL_PRISM_REVIEW_LEDGER || path.join(process.cwd(), ".model-prism", "review-ledger.jsonl");
 
 export interface ReviewRecord {
   ts: string;
