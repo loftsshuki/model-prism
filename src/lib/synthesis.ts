@@ -121,6 +121,14 @@ export const SYNTHESIS_MODEL_IDS: Record<"sonnet" | "opus", string> = {
   sonnet: "claude-sonnet-4-6",
 };
 
+// OpenRouter slug for the synthesis step. Routing synthesis through OpenRouter
+// (instead of the direct Anthropic API) means the whole pipeline — council +
+// synthesis — bills to ONE account (OPENROUTER_API_KEY), so an empty Anthropic
+// pay-as-you-go balance can no longer strand a fully-completed council run at
+// the final step. Fable 5 is the newest Anthropic model and is the default
+// synthesizer for the plan-review CLI. Verified present on OpenRouter 2026-06-11.
+export const OPENROUTER_SYNTHESIS_MODEL_ID = "anthropic/claude-fable-5";
+
 // An Error tagged as non-retryable — a retry would only reproduce the same failure
 // (malformed request, bad key, exhausted credits), so the loop fails fast on it.
 type TaggedError = Error & { nonRetryable?: boolean };
@@ -129,7 +137,8 @@ type TaggedError = Error & { nonRetryable?: boolean };
 // the HTTP status that carried it (e.g. some "credit balance too low" come back 4xx).
 function isNonRetryableBody(body: string): boolean {
   const b = body.toLowerCase();
-  return b.includes("credit balance") || b.includes("invalid_request") || b.includes("authentication");
+  return b.includes("credit balance") || b.includes("insufficient credit") ||
+    b.includes("invalid_request") || b.includes("authentication");
 }
 
 // Call Anthropic directly from the browser — no Vercel timeout
@@ -216,6 +225,96 @@ export async function synthesizeDirect(
 
   // Final failure after exhausting retries: re-throw the last error so callers see the
   // original Anthropic/network message verbatim (unwrapped).
+  throw lastError ?? new Error("Synthesis failed: unknown error");
+}
+
+// Synthesize via OpenRouter (OpenAI-compatible chat-completions + function
+// calling) instead of the direct Anthropic API. Same SynthesisResult contract.
+// Used by the plan-review CLI so the whole pipeline bills to OPENROUTER_API_KEY.
+export async function synthesizeViaOpenRouter(opts: {
+  openrouterKey: string;
+  content: string;
+  analysisPrompt: string;
+  responses: Array<{ model: string; modelName: string; family: string; response: string }>;
+  modelId?: string;
+  context?: string;
+  customSynthesisInstructions?: string | null;
+  retryOptions?: { maxAttempts?: number; baseDelayMs?: number };
+}): Promise<SynthesisResult> {
+  const modelId = opts.modelId ?? OPENROUTER_SYNTHESIS_MODEL_ID;
+  // Fable 5 (and other reasoning models) reject FORCED tool_choice — Anthropic
+  // returns "tool_choice forces tool use is not compatible with this model"
+  // because extended thinking is incompatible with forcing a specific tool. So
+  // we use tool_choice:"auto" and append an explicit directive instead; verified
+  // Fable 5 reliably emits the tool call this way (finish_reason: tool_calls).
+  const prompt = buildSynthesisPrompt(
+    opts.content, opts.analysisPrompt, opts.responses, opts.context, opts.customSynthesisInstructions
+  ) + "\n\nIMPORTANT: Respond ONLY by calling the `synthesis` tool with the structured result. Do not reply with prose.";
+  const maxAttempts = opts.retryOptions?.maxAttempts ?? 4;
+  const baseDelayMs = opts.retryOptions?.baseDelayMs ?? 2000;
+
+  // One attempt: fetch + extract the forced tool call. Throws TaggedError; the
+  // caller's loop decides retry vs fast-fail. Kept small to bound complexity.
+  const attempt = async (): Promise<SynthesisResult> => {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${opts.openrouterKey}`,
+        "content-type": "application/json",
+        "HTTP-Referer": "https://model-prism.vercel.app",
+        "X-Title": "Model Prism",
+      },
+      body: JSON.stringify({
+        model: modelId,
+        max_tokens: 16384,
+        tools: [{
+          type: "function",
+          function: {
+            name: "synthesis",
+            description: "Output the structured synthesis result",
+            parameters: SynthesisJsonSchema,
+          },
+        }],
+        tool_choice: "auto",
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+
+    if (!res.ok) {
+      const body = await res.text();
+      const e: TaggedError = new Error(`OpenRouter error: ${res.status} ${body.slice(0, 200)}`);
+      e.nonRetryable = res.status === 400 || res.status === 401 || res.status === 403 || isNonRetryableBody(body);
+      throw e;
+    }
+
+    const data = await res.json();
+    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+    const rawArgs = toolCall?.function?.arguments;
+    if (!rawArgs) {
+      // Model returned prose instead of the forced tool call — transient, retry.
+      throw new Error("No structured output (tool_call) returned from synthesis model");
+    }
+    try {
+      return JSON.parse(rawArgs) as SynthesisResult;
+    } catch {
+      throw new Error("Synthesis tool_call arguments were not valid JSON");
+    }
+  };
+
+  let lastError: Error | null = null;
+  for (let i = 1; i <= maxAttempts; i++) {
+    try {
+      return await attempt();
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      if ((lastError as TaggedError).nonRetryable) throw lastError;
+      if (i < maxAttempts) {
+        const backoffMs = baseDelayMs * 2 ** (i - 1) + Math.floor(Math.random() * 500);
+        console.error(`  Synthesis attempt ${i}/${maxAttempts} failed (${lastError.message.slice(0, 120)}); retrying in ${backoffMs}ms...`);
+        await new Promise((r) => setTimeout(r, backoffMs));
+      }
+    }
+  }
   throw lastError ?? new Error("Synthesis failed: unknown error");
 }
 

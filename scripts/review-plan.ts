@@ -20,7 +20,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import { fanOut } from "../src/lib/fan-out";
-import { synthesizeDirect, SYNTHESIS_MODEL_IDS } from "../src/lib/synthesis";
+import { synthesizeViaOpenRouter, OPENROUTER_SYNTHESIS_MODEL_ID } from "../src/lib/synthesis";
 import {
   buildLocalContext, buildLocalContextString, findRepoRoot, LocalContext,
   detectPlanReferencedFiles, loadReferencedFiles, detectSemanticReferences,
@@ -296,7 +296,7 @@ content-hash: ${data.contentHash}
 context-repo: ${data.contextRepo}
 models-succeeded: ${successfulModels.length}
 models-failed: ${failedModels.length}
-synthesis-model: ${SYNTHESIS_MODEL_IDS.opus}
+synthesis-model: ${OPENROUTER_SYNTHESIS_MODEL_ID}
 total-input-tokens: ${data.totalInputTokens}
 total-output-tokens: ${data.totalOutputTokens}
 duration-sec: ${data.durationSec}
@@ -422,7 +422,6 @@ async function reviewPlan(
   context: LocalContext,
   args: Args,
   openrouterKey: string,
-  anthropicKey: string,
   reviewPromptOverride: string | null,
   synthesisPromptOverride: string | null,
   activeCouncilModels: ModelInfo[]
@@ -535,7 +534,7 @@ async function reviewPlan(
     };
   }
 
-  console.log(`  Synthesizing with Claude Opus... (estimated cost: $${estimatedSynthesisCost.toFixed(3)})`);
+  console.log(`  Synthesizing with Claude Fable 5 (via OpenRouter)... (estimated cost: $${estimatedSynthesisCost.toFixed(3)})`);
   const synthesisResponses = successful.map((r) => {
     const info = activeCouncilModels.find((m) => m.id === r.model);
     return {
@@ -546,15 +545,14 @@ async function reviewPlan(
     };
   });
 
-  const synthesis = await synthesizeDirect(
-    anthropicKey,
-    "opus",
-    planContent,
-    effectiveReviewPrompt,
-    synthesisResponses,
-    contextString,
-    synthesisPromptOverride
-  );
+  const synthesis = await synthesizeViaOpenRouter({
+    openrouterKey,
+    content: planContent,
+    analysisPrompt: effectiveReviewPrompt,
+    responses: synthesisResponses,
+    context: contextString,
+    customSynthesisInstructions: synthesisPromptOverride,
+  });
 
   const durationSec = Math.round((Date.now() - startTime) / 1000);
   const totalInputTokens = responses.reduce((sum, r) => sum + (r.inputTokens ?? 0), 0);
@@ -585,7 +583,7 @@ async function reviewPlan(
       contentHash,
       contextRepo: context.repoName,
       roster: args.roster ?? "default",
-      synthesisModel: SYNTHESIS_MODEL_IDS.opus,
+      synthesisModel: OPENROUTER_SYNTHESIS_MODEL_ID,
       durationSec,
       synthesis,
       responses,
@@ -604,7 +602,7 @@ async function reviewPlan(
       plan: path.basename(planPath),
       contextRepo: context.repoName,
       roster: args.roster ?? "default",
-      synthesisModel: SYNTHESIS_MODEL_IDS.opus,
+      synthesisModel: OPENROUTER_SYNTHESIS_MODEL_ID,
       durationSec,
       synthesis,
       responses,
@@ -659,9 +657,13 @@ async function main(): Promise<number> {
       console.error("Error: OPENROUTER_API_KEY environment variable is required");
       process.exit(1);
     }
-    if (!anthropicKey) {
-      console.error("Error: ANTHROPIC_API_KEY environment variable is required");
-      process.exit(1);
+    // Synthesis now routes through OpenRouter (Fable 5), so ANTHROPIC_API_KEY is
+    // only needed for optional brief enhancement. If it's absent, degrade
+    // gracefully to a template-only brief rather than blocking the whole run —
+    // the empty-Anthropic-account failure mode is exactly what this fixes.
+    if (args.enhance && !anthropicKey) {
+      console.warn("Note: ANTHROPIC_API_KEY not set — using template-only brief (synthesis still runs via OpenRouter).");
+      args.enhance = false;
     }
   }
 
@@ -759,7 +761,6 @@ async function main(): Promise<number> {
         context,
         args,
         openrouterKey,
-        anthropicKey,
         reviewPromptOverride,
         synthesisPromptOverride,
         councilForPlan!,
