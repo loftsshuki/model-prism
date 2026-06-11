@@ -310,7 +310,7 @@ duration-sec: ${data.durationSec}
   lines.push(`Reviewed by ${successfulModels.length} models across ${new Set(successfulModels.map((r) => {
     const info = rosterLookup.find((m) => m.id === r.model);
     return info?.family ?? "unknown";
-  })).size} architectures, synthesized with Claude Opus.`);
+  })).size} architectures, synthesized with ${OPENROUTER_SYNTHESIS_MODEL_ID} (via OpenRouter).`);
   lines.push("");
 
   // ⚖️ DECISION REQUIRED — lead with where the council SPLIT. A council's value isn't the
