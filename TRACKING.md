@@ -23,6 +23,18 @@
 - Merge `roster-review` PR to master, then reconcile the main checkout's branch (above)
 - Test Context Packs end-to-end with real GitHub repo
 - HTML sibling for context-packs plan doc
+- **⚠️ Synthesis-path divergence (FLAGGED 2026-06-11).** The **plan-review CLI**
+  (`scripts/review-plan.ts`) now synthesizes via **Fable 5 over OpenRouter**
+  (`synthesizeViaOpenRouter`, commit `dbe577d`) — whole pipeline bills to
+  `OPENROUTER_API_KEY`. The **web app** (`src/app/page.tsx`) still uses the OLD
+  path: `synthesizeDirect()` → direct Anthropic API with the browser-entered key
+  (sonnet/opus). **They are NOT in sync.** To converge the web app onto Fable 5 /
+  OpenRouter: switch `page.tsx` to call `synthesizeViaOpenRouter` (model
+  `anthropic/claude-fable-5`) using the OpenRouter key it already holds for the
+  client-driven fan-out, and drop the Anthropic-key requirement from the synthesis
+  UI. Note: Fable 5 rejects FORCED `tool_choice` — must use `tool_choice:"auto"`
+  (already handled in `synthesizeViaOpenRouter`). Pushing `master` deploys the web
+  app but changes nothing about its synthesis until this conversion is done.
 
 ## Done This Week
 
