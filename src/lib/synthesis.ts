@@ -266,7 +266,13 @@ export async function synthesizeViaOpenRouter(opts: {
       },
       body: JSON.stringify({
         model: modelId,
-        max_tokens: 16384,
+        // 32K, raised from 16K (2026-06-12): a 10-model council synthesis emits an
+        // entire rewritten master plan as tool-call JSON — 16K truncated mid-string
+        // on real plans (finish_reason=length), which surfaced as "arguments were
+        // not valid JSON" on every retry. Fable 5 supports up to 128K output, but a
+        // non-streaming fetch must receive headers before undici's 300s timeout, so
+        // don't raise this further without switching to streaming.
+        max_tokens: 32000,
         tools: [{
           type: "function",
           function: {
@@ -288,16 +294,25 @@ export async function synthesizeViaOpenRouter(opts: {
     }
 
     const data = await res.json();
-    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+    const choice = data.choices?.[0];
+    const finishReason = choice?.finish_reason ?? choice?.native_finish_reason;
+    const toolCall = choice?.message?.tool_calls?.[0];
     const rawArgs = toolCall?.function?.arguments;
     if (!rawArgs) {
       // Model returned prose instead of the forced tool call — transient, retry.
-      throw new Error("No structured output (tool_call) returned from synthesis model");
+      throw new Error(`No structured output (tool_call) returned from synthesis model (finish_reason=${finishReason ?? "unknown"})`);
     }
     try {
       return JSON.parse(rawArgs) as SynthesisResult;
     } catch {
-      throw new Error("Synthesis tool_call arguments were not valid JSON");
+      // finish_reason=length means the arguments were cut mid-string by max_tokens —
+      // a retry at the same cap fails identically, so the message must say so.
+      const detail = `finish_reason=${finishReason ?? "unknown"}, args_len=${rawArgs.length}, tail=${JSON.stringify(rawArgs.slice(-60))}`;
+      throw new Error(
+        finishReason === "length"
+          ? `Synthesis tool_call truncated by max_tokens (${detail})`
+          : `Synthesis tool_call arguments were not valid JSON (${detail})`
+      );
     }
   };
 
