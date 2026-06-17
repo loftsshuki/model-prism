@@ -444,8 +444,12 @@ ${fusionBlock}---
     for (const t of data.synthesis.themeMatrix) {
       lines.push(`### ${t.theme}`);
       for (const [model, score] of Object.entries(t.scores)) {
-        const bar = "█".repeat(score) + "░".repeat(3 - score);
-        lines.push(`- ${model}: \`${bar}\` ${score}/3`);
+        // Clamp to [0,3]: the synthesis model occasionally returns an out-of-range
+        // score (e.g. 7), which made "░".repeat(3 - score) throw RangeError and
+        // crash the whole render AFTER the API spend. Defensive clamp, never crash.
+        const s = Math.max(0, Math.min(3, Math.round(Number(score) || 0)));
+        const bar = "█".repeat(s) + "░".repeat(3 - s);
+        lines.push(`- ${model}: \`${bar}\` ${s}/3`);
       }
       lines.push("");
     }
