@@ -26,8 +26,9 @@ import { synthesizeViaOpenRouter, OPENROUTER_SYNTHESIS_MODEL_ID } from "../src/l
 import {
   judgeViaOpenRouter, synthesizeFromJudge, JudgeError,
   dropUnresolvedCitations, tightenProse, renderDualLensSections,
-  type JudgeResult,
+  type JudgeResult, type PhaseUsage,
 } from "../src/lib/fusion";
+import { buildFusionTelemetry, appendFusionTelemetry } from "../src/lib/fusion-telemetry";
 import { computeRiskScore, summarizeRisk, type RiskScore } from "../src/lib/risk-score";
 import { extractLockedDecisions, lintLockedDecisions } from "../src/lib/locked-decisions";
 import { pinHeadSha, verifyJudgeEvidence } from "../src/lib/fusion-integrity";
@@ -496,6 +497,7 @@ interface FusionArtifacts {
   evidenceKept: number;
   evidenceDropped: number;
   citationsDropped: number;
+  phases: PhaseUsage[];           // per-phase usage for Component E telemetry
 }
 
 // Persist the (SHA-verified) judge JSON to a content-addressed path so re-runs and
@@ -556,6 +558,9 @@ async function runFusionMerge(opts: {
     console.log(`  [fusion] extracted ${lockedDecisions.length} locked decision(s) (parser, zero-token)`);
   }
 
+  const phases: PhaseUsage[] = [];
+  const onUsage = (u: PhaseUsage) => phases.push(u);
+
   const judge = await judgeViaOpenRouter({
     openrouterKey: opts.openrouterKey,
     draft: opts.planContent,
@@ -563,6 +568,7 @@ async function runFusionMerge(opts: {
     reviewPrompt: opts.reviewPrompt,
     context: opts.context,
     lockedDecisions,
+    onUsage,
   });
 
   // Accuracy-aware integrity: drop repo citations that don't resolve/aren't supported
@@ -582,6 +588,7 @@ async function runFusionMerge(opts: {
     judge: filteredJudge,
     draft: opts.planContent,
     customInstructions: opts.synthesisPromptOverride,
+    onUsage,
   });
 
   // Drop synthesizer citations that don't map to a surviving evidence id, then
@@ -597,6 +604,7 @@ async function runFusionMerge(opts: {
     evidenceKept: verification.kept.length,
     evidenceDropped: verification.dropped.length,
     citationsDropped: citationsDropped.length,
+    phases,
   };
 }
 
@@ -827,6 +835,28 @@ async function reviewPlan(
     riskScore,
     fusion: fusionInfo,
   });
+
+  // Fusion run telemetry (Component E) — fallback-rate + cost-by-roster as a
+  // CI-enforceable query (Phase-5 gates). Best-effort: never fail a completed review.
+  if (useFusion) {
+    try {
+      appendFusionTelemetry(buildFusionTelemetry({
+        ts: new Date().toISOString(),
+        plan: path.basename(planPath),
+        contextRepo: context.repoName,
+        roster: args.roster ?? "default",
+        fellBackToLegacy: prismFallback === "legacy",
+        phases: fusionInfo?.phases ?? [],
+        evidenceKept: fusionInfo?.evidenceKept ?? 0,
+        evidenceDropped: fusionInfo?.evidenceDropped ?? 0,
+        citationsDropped: fusionInfo?.citationsDropped ?? 0,
+        lockedDecisions: synthesis.lockedDecisions ?? [],
+        strategicBlindSpots: synthesis.strategicBlindSpots ?? [],
+      }));
+    } catch (e) {
+      console.error(`  (fusion telemetry not recorded: ${e instanceof Error ? e.message : e})`);
+    }
+  }
 
   // Record per-model telemetry for the `model-value` report. Best-effort: a telemetry
   // write must never fail a completed review.

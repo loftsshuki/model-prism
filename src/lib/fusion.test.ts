@@ -3,8 +3,8 @@ import {
   evidenceId, judgeViaOpenRouter, synthesizeFromJudge, judgeToSynthesisFields,
   extractCitedIds, dropUnresolvedCitations, quoteSupported, tightenProse,
   JudgeResult, JudgeJsonSchema, coerceStrategicCategory, STRATEGIC_CATEGORIES,
-  renderDualLensSections, normalizeReviewForSnapshot,
-  type JudgeResult as JudgeResultT,
+  renderDualLensSections, normalizeReviewForSnapshot, mergeCriticFindings,
+  type JudgeResult as JudgeResultT, type StrategicBlindSpot,
 } from "./fusion";
 
 const realFetch = globalThis.fetch;
@@ -173,6 +173,49 @@ describe("renderDualLensSections (Phase 2 / L7 / L8 / L9)", () => {
     const a = "reviewed-at: 2026-06-17T19:43:06.320Z\npinned-sha: a1b2c3d4e5f6\n\n\nbody  ";
     const b = "reviewed-at: 2026-01-01T00:00:00.000Z\npinned-sha: ffffffffffff\n\nbody";
     expect(normalizeReviewForSnapshot(a)).toBe(normalizeReviewForSnapshot(b));
+  });
+});
+
+describe("mergeCriticFindings (Component C — internal, G1)", () => {
+  const sbs = (category: string, gap: string, severity: StrategicBlindSpot["severity"]): StrategicBlindSpot =>
+    ({ category, gap, why_it_matters: "x", severity, lens: "strategic" });
+
+  it("concatenates distinct findings", () => {
+    const merged = mergeCriticFindings([sbs("i18n", "a", "low")], [sbs("accessibility", "b", "high")]);
+    expect(merged).toHaveLength(2);
+  });
+
+  it("dedupes by (category, normalized gap), HIGHER severity wins on clash", () => {
+    const merged = mergeCriticFindings(
+      [sbs("success-metrics", "No   success metric", "low")],
+      [sbs("success-metrics", "no success metric", "high")],
+    );
+    expect(merged).toHaveLength(1);
+    expect(merged[0].severity).toBe("high");
+  });
+
+  it("keeps the base severity when it is already higher", () => {
+    const merged = mergeCriticFindings(
+      [sbs("core-assumption", "premise unproven", "high")],
+      [sbs("core-assumption", "premise unproven", "low")],
+    );
+    expect(merged[0].severity).toBe("high");
+  });
+
+  it("does not merge across different categories with the same gap", () => {
+    const merged = mergeCriticFindings([sbs("i18n", "same gap", "low")], [sbs("accessibility", "same gap", "low")]);
+    expect(merged).toHaveLength(2);
+  });
+});
+
+describe("usage telemetry plumbing (Component E)", () => {
+  it("reports judge usage to onUsage with the succeeding attempt number", async () => {
+    const data = { choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ function: { arguments: JSON.stringify(judgePayload()) } }] } }], usage: { prompt_tokens: 111, completion_tokens: 222, cost: 0.005 } };
+    globalThis.fetch = (async () => new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+    const seen: unknown[] = [];
+    await judgeViaOpenRouter({ openrouterKey: "k", draft: "d", responses: [], reviewPrompt: "p", onUsage: (u) => seen.push(u), ...FAST });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ phase: "judge", inputTokens: 111, outputTokens: 222, cost: 0.005, attempts: 1 });
   });
 });
 
