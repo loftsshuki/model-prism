@@ -117,4 +117,16 @@ export interface SynthesisResult {
     theme: string;
     scores: Record<string, number>;
   }>;
+  // ── Dual-lens fields (fusion unification) ──────────────────────────────────
+  // First-class, non-collapsible — backfilled from the judge JSON by
+  // judgeToSynthesisFields (same guarantee as blindSpots). The RENDERER owns the two
+  // output section headings (L9); the synthesizer references them in prose but never
+  // emits the headings. Legacy never sets these → its review files stay byte-stable.
+  lockedDecisions?: string[];                         // parser-owned (D1)
+  strategicBlindSpots?: Array<{
+    category: string;
+    gap: string;
+    whyItMatters: string;
+    severity: "high" | "medium" | "low";
+  }>;
 }

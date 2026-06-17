@@ -2,7 +2,8 @@ import { describe, it, expect, afterEach } from "bun:test";
 import {
   evidenceId, judgeViaOpenRouter, synthesizeFromJudge, judgeToSynthesisFields,
   extractCitedIds, dropUnresolvedCitations, quoteSupported, tightenProse,
-  JudgeResult, type JudgeResult as JudgeResultT,
+  JudgeResult, JudgeJsonSchema, coerceStrategicCategory, STRATEGIC_CATEGORIES,
+  type JudgeResult as JudgeResultT,
 } from "./fusion";
 
 const realFetch = globalThis.fetch;
@@ -44,10 +45,83 @@ describe("JudgeResult schema", () => {
     const parsed = JudgeResult.safeParse(judgePayload());
     expect(parsed.success).toBe(true);
   });
-  it("rejects a payload missing schemaVersion", () => {
+  it("defaults a missing schemaVersion to \"2\" (tolerant reader, L6/T5)", () => {
     const p = judgePayload();
     delete (p as Record<string, unknown>).schemaVersion;
-    expect(JudgeResult.safeParse(p).success).toBe(false);
+    const parsed = JudgeResult.safeParse(p);
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.schemaVersion).toBe("2");
+  });
+  it("still parses legacy schemaVersion \"1\" (no strategic data ≠ parse failure)", () => {
+    const parsed = JudgeResult.safeParse(judgePayload({ schemaVersion: "1" }));
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.strategic_blind_spots).toEqual([]);
+    expect(parsed.success && parsed.data.locked_decisions).toEqual([]);
+  });
+  it("rejects an unknown schemaVersion (only 1 and 2 are valid)", () => {
+    expect(JudgeResult.safeParse(judgePayload({ schemaVersion: "9" as never })).success).toBe(false);
+  });
+});
+
+describe("dual-lens schema (Phase 1)", () => {
+  it("treats an absent strategic_blind_spots array as [] (tolerant, L1)", () => {
+    const parsed = JudgeResult.safeParse(judgePayload());
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.strategic_blind_spots).toEqual([]);
+  });
+
+  it("validates and tags a strategic blind spot with lens=strategic", () => {
+    const p = judgePayload({
+      strategic_blind_spots: [{ category: "accessibility", gap: "no keyboard nav", why_it_matters: "WCAG", severity: "high" }] as never,
+    });
+    const parsed = JudgeResult.safeParse(p);
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.strategic_blind_spots[0].lens).toBe("strategic");
+  });
+
+  it("coerces an unknown category to 'other' instead of failing (L10/T2)", () => {
+    const p = judgePayload({
+      strategic_blind_spots: [{ category: "made-up-thing", gap: "g", why_it_matters: "w", severity: "low" }] as never,
+    });
+    const parsed = JudgeResult.safeParse(p);
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.strategic_blind_spots[0].category).toBe("other");
+  });
+
+  it("coerceStrategicCategory passes known values through and maps unknowns to other", () => {
+    expect(coerceStrategicCategory("i18n")).toBe("i18n");
+    expect(coerceStrategicCategory("")).toBe("other");
+    expect(coerceStrategicCategory("nonsense")).toBe("other");
+    expect(STRATEGIC_CATEGORIES).toContain("accessibility");
+  });
+
+  it("PARITY (G10): JudgeJsonSchema properties == Zod keys minus parser-owned locked_decisions", () => {
+    const zodKeys = Object.keys((JudgeResult as unknown as { shape: Record<string, unknown> }).shape).sort();
+    const schemaKeys = Object.keys(JudgeJsonSchema.properties).sort();
+    // locked_decisions is parser-owned (D1) — intentionally absent from the LLM schema.
+    expect(zodKeys.filter((k) => k !== "locked_decisions")).toEqual(schemaKeys);
+    // Every required key in the LLM schema is a real Zod key.
+    for (const req of JudgeJsonSchema.required) expect(zodKeys).toContain(req);
+  });
+
+  it("judgeToSynthesisFields backfills lockedDecisions + strategicBlindSpots", () => {
+    const judge = JudgeResult.parse(judgePayload({
+      locked_decisions: ["Council stays at 10 models"],
+      strategic_blind_spots: [{ category: "success-metrics", gap: "no metric", why_it_matters: "unmeasurable", severity: "medium" }] as never,
+    }));
+    const fields = judgeToSynthesisFields(judge);
+    expect(fields.lockedDecisions).toEqual(["Council stays at 10 models"]);
+    expect(fields.strategicBlindSpots?.[0]).toEqual({ category: "success-metrics", gap: "no metric", whyItMatters: "unmeasurable", severity: "medium" });
+  });
+
+  it("judge overwrites locked_decisions with the parser's output, ignoring any LLM echo", async () => {
+    // Even if the model emits its own locked_decisions, the parser's value wins.
+    globalThis.fetch = (async () => toolResponse(judgePayload({ locked_decisions: ["LLM-INVENTED"] as never }))) as typeof fetch;
+    const r = await judgeViaOpenRouter({
+      openrouterKey: "k", draft: "d", responses: [], reviewPrompt: "p",
+      lockedDecisions: ["PARSER-TRUTH"], ...FAST,
+    });
+    expect(r.locked_decisions).toEqual(["PARSER-TRUTH"]);
   });
 });
 

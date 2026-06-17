@@ -29,6 +29,7 @@ import {
   type JudgeResult,
 } from "../src/lib/fusion";
 import { computeRiskScore, summarizeRisk, type RiskScore } from "../src/lib/risk-score";
+import { extractLockedDecisions, lintLockedDecisions } from "../src/lib/locked-decisions";
 import { pinHeadSha, verifyJudgeEvidence } from "../src/lib/fusion-integrity";
 import { shouldRunAgentic, runAgenticMember } from "../src/lib/fusion-agentic";
 import {
@@ -534,12 +535,24 @@ async function runFusionMerge(opts: {
   // commit, not the dirty working tree (line numbers drift while a plan is edited).
   const pinnedSha = pinHeadSha(opts.repoRoot);
 
+  // (D1/T1) Extract founder Locked Decisions DETERMINISTICALLY before the judge call,
+  // and run the zero-token pre-flight linter so a near-miss heading/frontmatter is
+  // caught before any council spend. The judge only acknowledges these; the parser
+  // owns the values written back onto the JudgeResult.
+  const lockedDecisions = extractLockedDecisions(opts.planContent);
+  const lint = lintLockedDecisions(opts.planContent);
+  for (const w of lint.warnings) console.warn(`  [locked-decisions] ${w}`);
+  if (lockedDecisions.length > 0) {
+    console.log(`  [fusion] extracted ${lockedDecisions.length} locked decision(s) (parser, zero-token)`);
+  }
+
   const judge = await judgeViaOpenRouter({
     openrouterKey: opts.openrouterKey,
     draft: opts.planContent,
     responses: opts.synthesisResponses,
     reviewPrompt: opts.reviewPrompt,
     context: opts.context,
+    lockedDecisions,
   });
 
   // Accuracy-aware integrity: drop repo citations that don't resolve/aren't supported
