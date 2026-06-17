@@ -139,7 +139,9 @@ type TaggedError = Error & { nonRetryable?: boolean };
 
 // A response body is non-retryable if it names a permanent condition, regardless of
 // the HTTP status that carried it (e.g. some "credit balance too low" come back 4xx).
-function isNonRetryableBody(body: string): boolean {
+// Exported so the fusion judge/synthesizer (src/lib/fusion.ts) shares the SAME
+// permanent-failure classification as legacy synthesis — one source of truth.
+export function isNonRetryableBody(body: string): boolean {
   const b = body.toLowerCase();
   return b.includes("credit balance") || b.includes("insufficient credit") ||
     b.includes("invalid_request") || b.includes("authentication");
