@@ -30,6 +30,7 @@ import {
 } from "../src/lib/fusion";
 import { computeRiskScore, summarizeRisk, type RiskScore } from "../src/lib/risk-score";
 import { pinHeadSha, verifyJudgeEvidence } from "../src/lib/fusion-integrity";
+import { shouldRunAgentic, runAgenticMember } from "../src/lib/fusion-agentic";
 import {
   buildLocalContext, buildLocalContextString, findRepoRoot, LocalContext,
   detectPlanReferencedFiles, loadReferencedFiles, detectSemanticReferences,
@@ -709,6 +710,30 @@ async function reviewPlan(
       response: r.response!,
     };
   });
+
+  // ── Phase 4: agentic members (gated) ────────────────────────────────────────
+  // On HIGH-risk plans only, when --agentic is set, give 1–2 members repo-grep so a
+  // reviewer can verify ground-truth claims. Their findings join the council BEFORE
+  // the judge. Each is hard-capped (B12); a member that abstains/fails is dropped.
+  if (args.prismMode === "fusion" && args.fusionTwoStage && shouldRunAgentic(riskScore, args.fusionAgentic)) {
+    const agenticModels = activeCouncilModels.filter((m) => m.tier !== "free").slice(0, 2);
+    console.log(`  [agentic] HIGH risk + --agentic → running ${agenticModels.length} repo-aware member(s)`);
+    for (const m of agenticModels) {
+      try {
+        const finding = await runAgenticMember({
+          openrouterKey, modelId: m.id, planContent, repoRoot: context.repoRoot,
+        });
+        if (finding) {
+          synthesisResponses.push({ model: `agentic:${m.id}`, modelName: `${m.name} (repo-aware)`, family: "agentic", response: finding });
+          console.log(`    ✓ ${m.name} (repo-aware) contributed a ground-truth review`);
+        } else {
+          console.log(`    ⊘ ${m.name} (repo-aware) abstained`);
+        }
+      } catch (e) {
+        console.log(`    ✗ ${m.name} (repo-aware) failed: ${(e as Error).message.slice(0, 80)}`);
+      }
+    }
+  }
 
   // ── Merge stage: legacy single-Opus OR fusion judge→synthesizer ─────────────
   // Fusion runs ONLY under --prism-mode fusion with two-stage enabled. ANY fusion
