@@ -292,8 +292,15 @@ Format as plain text with clear section headers. Be specific — name actual fil
 
 Do NOT include instructions, caveats, or meta-commentary. Just the summary.`;
 
+// Brief enhancement bills to OpenRouter, same as the synthesis step
+// (synthesizeViaOpenRouter). The whole plan-review pipeline runs on ONE
+// account (OPENROUTER_API_KEY) — the Anthropic API is never called directly,
+// so an empty/zero-credit Anthropic account no longer breaks enhancement.
+// Sonnet (cheap, fast) is enough for a structural brief; reserve Opus for synthesis.
+const ENHANCE_MODEL_ID = "anthropic/claude-sonnet-4-6";
+
 export async function enhanceBrief(
-  anthropicKey: string,
+  openrouterKey: string,
   templateBrief: string,
   keyFileContents: Record<string, string>
 ): Promise<string> {
@@ -303,21 +310,21 @@ export async function enhanceBrief(
 
   const userMessage = `TEMPLATE BRIEF:\n${templateBrief}\n\nKEY FILE CONTENTS:\n${fileSection}`;
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
-      "x-api-key": anthropicKey,
-      "anthropic-version": "2023-06-01",
+      "Authorization": `Bearer ${openrouterKey}`,
       "content-type": "application/json",
-      "anthropic-dangerous-direct-browser-access": "true",
+      "HTTP-Referer": "https://model-prism.vercel.app",
+      "X-Title": "Model Prism",
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-6",
+      model: ENHANCE_MODEL_ID,
       max_tokens: 2048,
       messages: [
+        { role: "system", content: ENHANCE_PROMPT },
         { role: "user", content: userMessage },
       ],
-      system: ENHANCE_PROMPT,
     }),
   });
 
@@ -327,12 +334,12 @@ export async function enhanceBrief(
   }
 
   const data = await res.json();
-  const textBlock = data.content?.find((b: { type: string }) => b.type === "text");
-  if (!textBlock?.text) {
+  const text = data.choices?.[0]?.message?.content;
+  if (!text) {
     throw new Error("No text returned from enhancement model");
   }
 
-  return textBlock.text;
+  return text;
 }
 
 // --- Key file detection for AI enhancement ---

@@ -361,7 +361,7 @@ export interface LocalContext {
 
 export async function buildLocalContext(
   repoRoot: string,
-  options: { enhance?: boolean; anthropicKey?: string } = {}
+  options: { enhance?: boolean; openrouterKey?: string } = {}
 ): Promise<LocalContext> {
   const repoName = path.basename(repoRoot);
   const tree = walkRepo(repoRoot);
@@ -380,10 +380,10 @@ export async function buildLocalContext(
     }
   }
 
-  // Optional AI enhancement
-  if (options.enhance && options.anthropicKey) {
+  // Optional AI enhancement (billed to OpenRouter, same account as synthesis)
+  if (options.enhance && options.openrouterKey) {
     try {
-      brief = await enhanceBrief(options.anthropicKey, brief, keyFiles);
+      brief = await enhanceBrief(options.openrouterKey, brief, keyFiles);
     } catch (err) {
       console.warn(`Brief enhancement failed: ${(err as Error).message}. Using template brief.`);
     }

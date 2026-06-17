@@ -1,0 +1,16 @@
+{
+  "_comment": "Strategic-lens blind-spot categories (Locked Decision: L10/T2). EXTERNAL config, not a hard-coded enum, so the taxonomy extends without a code/schema/persisted-JSON migration. An unknown value emitted by the judge is coerced to 'other' with a logged warning (never a hard parse failure). The first six are the manual-blend reference categories the Phase-5 golden gate measures against (a11y, i18n, teaching-efficacy folded into core-assumption, success-metrics, product-viability).",
+  "categories": [
+    "product-viability",
+    "core-assumption",
+    "success-metrics",
+    "accessibility",
+    "i18n",
+    "security-threat-model",
+    "data-privacy",
+    "regulatory-compliance",
+    "performance-scalability",
+    "dependency-risk",
+    "other"
+  ]
+}

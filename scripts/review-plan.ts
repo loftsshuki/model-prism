@@ -13,8 +13,9 @@
  *   --no-enhance     Skip AI enhancement of the repo brief (use template only)
  *
  * Environment:
- *   OPENROUTER_API_KEY   Required
- *   ANTHROPIC_API_KEY    Required for synthesis + brief enhancement
+ *   OPENROUTER_API_KEY   Required — bills the ENTIRE pipeline (council fan-out,
+ *                        brief enhancement via Sonnet, and Opus synthesis). The
+ *                        Anthropic API is never called directly.
  */
 import * as fs from "fs";
 import * as path from "path";
@@ -25,10 +26,12 @@ import { synthesizeViaOpenRouter, OPENROUTER_SYNTHESIS_MODEL_ID } from "../src/l
 // (single-Opus merge) is untouched and remains the default + permanent fallback.
 import {
   judgeViaOpenRouter, synthesizeFromJudge, JudgeError,
-  dropUnresolvedCitations, tightenProse,
-  type JudgeResult,
+  dropUnresolvedCitations, tightenProse, renderDualLensSections,
+  type JudgeResult, type PhaseUsage,
 } from "../src/lib/fusion";
+import { buildFusionTelemetry, appendFusionTelemetry } from "../src/lib/fusion-telemetry";
 import { computeRiskScore, summarizeRisk, type RiskScore } from "../src/lib/risk-score";
+import { extractLockedDecisions, lintLockedDecisions } from "../src/lib/locked-decisions";
 import { pinHeadSha, verifyJudgeEvidence } from "../src/lib/fusion-integrity";
 import { shouldRunAgentic, runAgenticMember } from "../src/lib/fusion-agentic";
 import {
@@ -38,7 +41,7 @@ import {
 import { ModelInfo, ModelResponse, SynthesisResult } from "../src/lib/types";
 // Council rosters live in their own module so the freshness checker
 // (scripts/check-roster-freshness.ts) reads the exact rosters that run here.
-import { ROSTERS, resolveAutoRoster, AUTO_THRESHOLD_TOKENS } from "../src/lib/rosters";
+import { ROSTERS, resolveAutoRoster, AUTO_THRESHOLD_TOKENS, readCriticality } from "../src/lib/rosters";
 import { buildRunTelemetry } from "../src/lib/telemetry";
 import { appendRunTelemetry } from "../src/lib/telemetry-ledger";
 import { buildReviewRecord, appendReviewRecord, writeBrainDigest } from "../src/lib/review-ledger";
@@ -367,6 +370,16 @@ ${fusionBlock}---
   })).size} architectures, synthesized with ${OPENROUTER_SYNTHESIS_MODEL_ID} (via OpenRouter).`);
   lines.push("");
 
+  // ── Dual-lens sections (renderer owns the headings — L9). Render ONLY when the
+  // dual-lens judge produced output: the SynthesisResult fields are `undefined` on
+  // legacy AND on fusion→legacy fallback, so those files stay byte-stable (L7). The
+  // logic is a pure, unit-tested helper (fusion.renderDualLensSections).
+  lines.push(...renderDualLensSections({
+    strategicBlindSpots: data.synthesis.strategicBlindSpots,
+    lockedDecisions: data.synthesis.lockedDecisions,
+    criticalityHigh: readCriticality(data.planContent) === "high",
+  }));
+
   // ⚖️ DECISION REQUIRED — lead with where the council SPLIT. A council's value isn't the
   // consensus (any one model gives you that) — it's the points strong models disagree on and
   // what they collectively overlooked. That's the surface a human actually has to adjudicate,
@@ -485,6 +498,7 @@ interface FusionArtifacts {
   evidenceKept: number;
   evidenceDropped: number;
   citationsDropped: number;
+  phases: PhaseUsage[];           // per-phase usage for Component E telemetry
 }
 
 // Persist the (SHA-verified) judge JSON to a content-addressed path so re-runs and
@@ -534,12 +548,28 @@ async function runFusionMerge(opts: {
   // commit, not the dirty working tree (line numbers drift while a plan is edited).
   const pinnedSha = pinHeadSha(opts.repoRoot);
 
+  // (D1/T1) Extract founder Locked Decisions DETERMINISTICALLY before the judge call,
+  // and run the zero-token pre-flight linter so a near-miss heading/frontmatter is
+  // caught before any council spend. The judge only acknowledges these; the parser
+  // owns the values written back onto the JudgeResult.
+  const lockedDecisions = extractLockedDecisions(opts.planContent);
+  const lint = lintLockedDecisions(opts.planContent);
+  for (const w of lint.warnings) console.warn(`  [locked-decisions] ${w}`);
+  if (lockedDecisions.length > 0) {
+    console.log(`  [fusion] extracted ${lockedDecisions.length} locked decision(s) (parser, zero-token)`);
+  }
+
+  const phases: PhaseUsage[] = [];
+  const onUsage = (u: PhaseUsage) => phases.push(u);
+
   const judge = await judgeViaOpenRouter({
     openrouterKey: opts.openrouterKey,
     draft: opts.planContent,
     responses: opts.synthesisResponses,
     reviewPrompt: opts.reviewPrompt,
     context: opts.context,
+    lockedDecisions,
+    onUsage,
   });
 
   // Accuracy-aware integrity: drop repo citations that don't resolve/aren't supported
@@ -559,6 +589,7 @@ async function runFusionMerge(opts: {
     judge: filteredJudge,
     draft: opts.planContent,
     customInstructions: opts.synthesisPromptOverride,
+    onUsage,
   });
 
   // Drop synthesizer citations that don't map to a surviving evidence id, then
@@ -574,6 +605,7 @@ async function runFusionMerge(opts: {
     evidenceKept: verification.kept.length,
     evidenceDropped: verification.dropped.length,
     citationsDropped: citationsDropped.length,
+    phases,
   };
 }
 
@@ -805,6 +837,28 @@ async function reviewPlan(
     fusion: fusionInfo,
   });
 
+  // Fusion run telemetry (Component E) — fallback-rate + cost-by-roster as a
+  // CI-enforceable query (Phase-5 gates). Best-effort: never fail a completed review.
+  if (useFusion) {
+    try {
+      appendFusionTelemetry(buildFusionTelemetry({
+        ts: new Date().toISOString(),
+        plan: path.basename(planPath),
+        contextRepo: context.repoName,
+        roster: args.roster ?? "default",
+        fellBackToLegacy: prismFallback === "legacy",
+        phases: fusionInfo?.phases ?? [],
+        evidenceKept: fusionInfo?.evidenceKept ?? 0,
+        evidenceDropped: fusionInfo?.evidenceDropped ?? 0,
+        citationsDropped: fusionInfo?.citationsDropped ?? 0,
+        lockedDecisions: synthesis.lockedDecisions ?? [],
+        strategicBlindSpots: synthesis.strategicBlindSpots ?? [],
+      }));
+    } catch (e) {
+      console.error(`  (fusion telemetry not recorded: ${e instanceof Error ? e.message : e})`);
+    }
+  }
+
   // Record per-model telemetry for the `model-value` report. Best-effort: a telemetry
   // write must never fail a completed review.
   try {
@@ -891,21 +945,16 @@ async function main(): Promise<number> {
   }
 
   const openrouterKey = process.env.OPENROUTER_API_KEY || "";
-  const anthropicKey = process.env.ANTHROPIC_API_KEY || "";
 
   if (!args.dryRun) {
     if (!openrouterKey) {
       console.error("Error: OPENROUTER_API_KEY environment variable is required");
       process.exit(1);
     }
-    // Synthesis now routes through OpenRouter (Fable 5), so ANTHROPIC_API_KEY is
-    // only needed for optional brief enhancement. If it's absent, degrade
-    // gracefully to a template-only brief rather than blocking the whole run —
-    // the empty-Anthropic-account failure mode is exactly what this fixes.
-    if (args.enhance && !anthropicKey) {
-      console.warn("Note: ANTHROPIC_API_KEY not set — using template-only brief (synthesis still runs via OpenRouter).");
-      args.enhance = false;
-    }
+    // The ENTIRE pipeline — council fan-out, brief enhancement, AND synthesis —
+    // now bills to OPENROUTER_API_KEY. The Anthropic API is never called directly,
+    // so ANTHROPIC_API_KEY is no longer required for any step. (Enhancement uses
+    // anthropic/claude-sonnet-4-6 *via OpenRouter*; synthesis uses Opus via OpenRouter.)
   }
 
   // Load custom prompt files if provided.
@@ -963,7 +1012,7 @@ async function main(): Promise<number> {
 
   const context = await buildLocalContext(repoRoot, {
     enhance: args.enhance && !args.dryRun,
-    anthropicKey,
+    openrouterKey,
   });
 
   console.log(`Context: ${context.tree.filter((f) => f.type === "file").length} files, ${Object.keys(context.keyFiles).length} key files`);
