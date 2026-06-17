@@ -125,9 +125,13 @@ export const SYNTHESIS_MODEL_IDS: Record<"sonnet" | "opus", string> = {
 // (instead of the direct Anthropic API) means the whole pipeline — council +
 // synthesis — bills to ONE account (OPENROUTER_API_KEY), so an empty Anthropic
 // pay-as-you-go balance can no longer strand a fully-completed council run at
-// the final step. Fable 5 is the newest Anthropic model and is the default
-// synthesizer for the plan-review CLI. Verified present on OpenRouter 2026-06-11.
-export const OPENROUTER_SYNTHESIS_MODEL_ID = "anthropic/claude-fable-5";
+// the final step. Opus 4.8 is the default synthesizer for the plan-review CLI.
+// (Previously Fable 5; swapped 2026-06-16 after Fable was pulled from access —
+// it lingered in OpenRouter's catalog but returned 404 at inference, failing
+// every plan review at the synthesis step. Opus 4.8 verified callable on
+// OpenRouter 2026-06-16.) NOTE: the OpenRouter slug is DOTTED (claude-opus-4.8),
+// not the hyphenated Anthropic API id (claude-opus-4-8) in SYNTHESIS_MODEL_IDS.
+export const OPENROUTER_SYNTHESIS_MODEL_ID = "anthropic/claude-opus-4.8";
 
 // An Error tagged as non-retryable — a retry would only reproduce the same failure
 // (malformed request, bad key, exhausted credits), so the loop fails fast on it.
@@ -242,11 +246,11 @@ export async function synthesizeViaOpenRouter(opts: {
   retryOptions?: { maxAttempts?: number; baseDelayMs?: number };
 }): Promise<SynthesisResult> {
   const modelId = opts.modelId ?? OPENROUTER_SYNTHESIS_MODEL_ID;
-  // Fable 5 (and other reasoning models) reject FORCED tool_choice — Anthropic
+  // Opus 4.8 (and other reasoning models) reject FORCED tool_choice — Anthropic
   // returns "tool_choice forces tool use is not compatible with this model"
   // because extended thinking is incompatible with forcing a specific tool. So
   // we use tool_choice:"auto" and append an explicit directive instead; verified
-  // Fable 5 reliably emits the tool call this way (finish_reason: tool_calls).
+  // these models reliably emit the tool call this way (finish_reason: tool_calls).
   const prompt = buildSynthesisPrompt(
     opts.content, opts.analysisPrompt, opts.responses, opts.context, opts.customSynthesisInstructions
   ) + "\n\nIMPORTANT: Respond ONLY by calling the `synthesis` tool with the structured result. Do not reply with prose.";
