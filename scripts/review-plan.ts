@@ -20,7 +20,17 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import { fanOut } from "../src/lib/fan-out";
-import { synthesizeDirect, SYNTHESIS_MODEL_IDS } from "../src/lib/synthesis";
+import { synthesizeViaOpenRouter, OPENROUTER_SYNTHESIS_MODEL_ID } from "../src/lib/synthesis";
+// Fusion path (judge→synthesizer). Only reachable under --prism-mode fusion; legacy
+// (single-Opus merge) is untouched and remains the default + permanent fallback.
+import {
+  judgeViaOpenRouter, synthesizeFromJudge, JudgeError,
+  dropUnresolvedCitations, tightenProse,
+  type JudgeResult,
+} from "../src/lib/fusion";
+import { computeRiskScore, summarizeRisk, type RiskScore } from "../src/lib/risk-score";
+import { pinHeadSha, verifyJudgeEvidence } from "../src/lib/fusion-integrity";
+import { shouldRunAgentic, runAgenticMember } from "../src/lib/fusion-agentic";
 import {
   buildLocalContext, buildLocalContextString, findRepoRoot, LocalContext,
   detectPlanReferencedFiles, loadReferencedFiles, detectSemanticReferences,
@@ -75,6 +85,11 @@ interface Args {
   excludeModels: string[];            // repeatable: model IDs to drop from council
   roster: string | null;              // roster preset name ('default'|'frontier'|'cheap'|'auto')
   autoThresholdTokens: number;        // size cutoff (tokens) for --roster auto
+  // --- Fusion mode (judge→synthesizer). Legacy is the default; fusion is opt-in. ---
+  prismMode: "legacy" | "fusion";     // master switch (B14). Default legacy.
+  fusionTwoStage: boolean;            // judge→synthesizer split (default ON in fusion)
+  fusionRiskGate: boolean;            // structured risk scorer (default ON in fusion)
+  fusionAgentic: boolean;             // repo-grep/web members on high-risk (default OFF)
 }
 
 function parseArgs(): Args {
@@ -117,6 +132,15 @@ Options:
                                         frontmatter field overrides the size heuristic.)
   --auto-threshold-tokens N  Size cutoff for --roster auto (default: ${AUTO_THRESHOLD_TOKENS}).
                              Plans estimated at ≥ N tokens get the frontier council.
+  --prism-mode <mode>        legacy (default) | fusion. legacy = single-Opus merge,
+                             fires every run (A/B baseline + permanent fallback).
+                             fusion = judge→synthesizer split + risk scoring.
+  --no-two-stage             In fusion mode, skip the judge→synthesizer split and
+                             use the legacy single-Opus merge (sub-flag, B14).
+  --no-risk-gate             In fusion mode, skip structured risk scoring.
+  --agentic                  In fusion mode, allow repo-grep/web council members on
+                             HIGH-risk plans (default OFF; requires two-stage). B14
+                             invalid combo (--agentic --no-two-stage) is rejected.
   --help                     Show this help
 `);
     process.exit(0);
@@ -160,6 +184,11 @@ Options:
     excludeModels: getStrArray("--exclude-model"),
     roster: getStr("--roster"),
     autoThresholdTokens: Math.floor(getNum("--auto-threshold-tokens", AUTO_THRESHOLD_TOKENS)),
+    prismMode: getStr("--prism-mode") === "fusion" ? "fusion" : "legacy",
+    // Sub-flags default ON in fusion (opt-out via --no-*); agentic defaults OFF.
+    fusionTwoStage: !argv.includes("--no-two-stage"),
+    fusionRiskGate: !argv.includes("--no-risk-gate"),
+    fusionAgentic: argv.includes("--agentic"),
   };
 }
 
@@ -265,6 +294,11 @@ interface ReviewData {
   durationSec: number;
   outputPathOverride: string | null;
   customReviewMode: boolean;
+  // Fusion/risk metadata (optional — only set under --prism-mode fusion).
+  prismMode?: "legacy" | "fusion";
+  prismFallback?: string | null;
+  riskScore?: RiskScore | null;
+  fusion?: FusionArtifacts | null;
 }
 
 function writeReviewFile(data: ReviewData): string {
@@ -289,6 +323,26 @@ function writeReviewFile(data: ReviewData): string {
   const sourceKey = data.customReviewMode ? "reviewed-doc" : "plan";
   const title = data.customReviewMode ? "Second-Pass Review" : "Plan Review";
 
+  // Fusion/risk frontmatter — only emitted in fusion mode so legacy review files
+  // are byte-for-byte unchanged (preserves the A/B baseline).
+  const fusionLines: string[] = [];
+  if (data.prismMode === "fusion") {
+    fusionLines.push(`prism-mode: fusion`);
+    if (data.prismFallback) fusionLines.push(`prism-fallback: ${data.prismFallback}`);
+    if (data.riskScore) {
+      fusionLines.push(`risk-score: ${data.riskScore.score}`);
+      fusionLines.push(`risk-tier: ${data.riskScore.tier}`);
+    }
+    if (data.fusion) {
+      fusionLines.push(`judge-json: ${data.fusion.judgeJsonRel}`);
+      if (data.fusion.pinnedSha) fusionLines.push(`pinned-sha: ${data.fusion.pinnedSha}`);
+      fusionLines.push(`evidence-kept: ${data.fusion.evidenceKept}`);
+      fusionLines.push(`evidence-dropped: ${data.fusion.evidenceDropped}`);
+      fusionLines.push(`citations-dropped: ${data.fusion.citationsDropped}`);
+    }
+  }
+  const fusionBlock = fusionLines.length ? fusionLines.join("\n") + "\n" : "";
+
   const frontmatter = `---
 ${sourceKey}: ${path.basename(data.planPath)}
 reviewed-at: ${new Date().toISOString()}
@@ -296,11 +350,11 @@ content-hash: ${data.contentHash}
 context-repo: ${data.contextRepo}
 models-succeeded: ${successfulModels.length}
 models-failed: ${failedModels.length}
-synthesis-model: ${SYNTHESIS_MODEL_IDS.opus}
+synthesis-model: ${OPENROUTER_SYNTHESIS_MODEL_ID}
 total-input-tokens: ${data.totalInputTokens}
 total-output-tokens: ${data.totalOutputTokens}
 duration-sec: ${data.durationSec}
----
+${fusionBlock}---
 
 `;
 
@@ -310,7 +364,7 @@ duration-sec: ${data.durationSec}
   lines.push(`Reviewed by ${successfulModels.length} models across ${new Set(successfulModels.map((r) => {
     const info = rosterLookup.find((m) => m.id === r.model);
     return info?.family ?? "unknown";
-  })).size} architectures, synthesized with Claude Opus.`);
+  })).size} architectures, synthesized with ${OPENROUTER_SYNTHESIS_MODEL_ID} (via OpenRouter).`);
   lines.push("");
 
   // ⚖️ DECISION REQUIRED — lead with where the council SPLIT. A council's value isn't the
@@ -390,8 +444,12 @@ duration-sec: ${data.durationSec}
     for (const t of data.synthesis.themeMatrix) {
       lines.push(`### ${t.theme}`);
       for (const [model, score] of Object.entries(t.scores)) {
-        const bar = "█".repeat(score) + "░".repeat(3 - score);
-        lines.push(`- ${model}: \`${bar}\` ${score}/3`);
+        // Clamp to [0,3]: the synthesis model occasionally returns an out-of-range
+        // score (e.g. 7), which made "░".repeat(3 - score) throw RangeError and
+        // crash the whole render AFTER the API spend. Defensive clamp, never crash.
+        const s = Math.max(0, Math.min(3, Math.round(Number(score) || 0)));
+        const bar = "█".repeat(s) + "░".repeat(3 - s);
+        lines.push(`- ${model}: \`${bar}\` ${s}/3`);
       }
       lines.push("");
     }
@@ -415,6 +473,110 @@ duration-sec: ${data.durationSec}
   return reviewPath;
 }
 
+// --- Fusion merge (judge → synthesizer) ------------------------------------
+// Orchestrates the fusion path: pin SHA → judge → SHA-verify evidence → persist
+// content-addressed judge JSON → synthesize from judge → drop unresolved citations
+// → tighten. Throws (JudgeError or Error) on failure; the caller soft-falls-back.
+
+interface FusionArtifacts {
+  synthesis: SynthesisResult;
+  judgeJsonRel: string;
+  pinnedSha: string | null;
+  evidenceKept: number;
+  evidenceDropped: number;
+  citationsDropped: number;
+}
+
+// Persist the (SHA-verified) judge JSON to a content-addressed path so re-runs and
+// A/B modes never collide (B9). Atomic (tmp + rename); also refreshes a
+// latest-<mode>.judge.json pointer. The worker lock (Python hook) serializes plans.
+function persistJudgeJson(
+  planPath: string,
+  judge: JudgeResult,
+  meta: { pinnedSha: string | null; draftHash: string; dropped: unknown },
+): string {
+  const planDir = path.dirname(planPath);
+  const slug = path.basename(planPath, ".md");
+  const outDir = path.join(planDir, "reviews", slug);
+  fs.mkdirSync(outDir, { recursive: true });
+
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  const payload = JSON.stringify(
+    { schemaVersion: "1", generatedAt: new Date().toISOString(), mode: "fusion", ...meta, judge },
+    null, 2,
+  );
+
+  const writeAtomic = (dest: string) => {
+    const tmp = `${dest}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, payload);
+    fs.renameSync(tmp, dest);
+  };
+
+  const fileName = `${ts}-${meta.draftHash}-fusion.judge.json`;
+  const fullPath = path.join(outDir, fileName);
+  writeAtomic(fullPath);
+  writeAtomic(path.join(outDir, "latest-fusion.judge.json"));
+
+  return path.relative(planDir, fullPath).replace(/\\/g, "/");
+}
+
+async function runFusionMerge(opts: {
+  openrouterKey: string;
+  planPath: string;
+  planContent: string;
+  reviewPrompt: string;
+  context: string;
+  synthesisResponses: Array<{ model: string; modelName: string; family: string; response: string }>;
+  repoRoot: string;
+  synthesisPromptOverride: string | null;
+}): Promise<FusionArtifacts> {
+  // (B2/B3) Pin the SHA at judge-invocation time — citations resolve against THIS
+  // commit, not the dirty working tree (line numbers drift while a plan is edited).
+  const pinnedSha = pinHeadSha(opts.repoRoot);
+
+  const judge = await judgeViaOpenRouter({
+    openrouterKey: opts.openrouterKey,
+    draft: opts.planContent,
+    responses: opts.synthesisResponses,
+    reviewPrompt: opts.reviewPrompt,
+    context: opts.context,
+  });
+
+  // Accuracy-aware integrity: drop repo citations that don't resolve/aren't supported
+  // against the pinned SHA. model:/draft citations are transcript-authored, kept.
+  const verification = verifyJudgeEvidence(judge, opts.repoRoot, pinnedSha);
+  const filteredJudge: JudgeResult = { ...judge, evidence: verification.kept };
+  if (verification.dropped.length > 0) {
+    console.log(`  [fusion] dropped ${verification.dropped.length} unverifiable citation(s): ${verification.dropped.map((d) => d.reason).join(",")}`);
+  }
+
+  const judgeJsonRel = persistJudgeJson(opts.planPath, filteredJudge, {
+    pinnedSha, draftHash: hashContent(opts.planContent), dropped: verification.dropped,
+  });
+
+  const synthesis = await synthesizeFromJudge({
+    openrouterKey: opts.openrouterKey,
+    judge: filteredJudge,
+    draft: opts.planContent,
+    customInstructions: opts.synthesisPromptOverride,
+  });
+
+  // Drop synthesizer citations that don't map to a surviving evidence id, then
+  // mechanically tighten (Phase 2). Unresolved citations are dropped, not laundered.
+  const validIds = new Set(filteredJudge.evidence.map((e) => e.id));
+  const { text, dropped: citationsDropped } = dropUnresolvedCitations(synthesis.masterDocument ?? "", validIds);
+  synthesis.masterDocument = tightenProse(text);
+
+  return {
+    synthesis,
+    judgeJsonRel,
+    pinnedSha,
+    evidenceKept: verification.kept.length,
+    evidenceDropped: verification.dropped.length,
+    citationsDropped: citationsDropped.length,
+  };
+}
+
 // --- Process a single plan ---
 
 async function reviewPlan(
@@ -422,7 +584,6 @@ async function reviewPlan(
   context: LocalContext,
   args: Args,
   openrouterKey: string,
-  anthropicKey: string,
   reviewPromptOverride: string | null,
   synthesisPromptOverride: string | null,
   activeCouncilModels: ModelInfo[]
@@ -467,6 +628,15 @@ async function reviewPlan(
   // Merge all pre-fetched files
   const allPreFetched = { ...referencedFiles, ...semanticFiles };
   const totalPreFetched = Object.keys(allPreFetched).length;
+
+  // B5 sequence step (1): emit the STRUCTURED risk score BEFORE the council launches,
+  // so the Phase-4 agentic gate (step 3) can read it. Re: council invocation this is
+  // shadow/log-only; re: agentic-member selection it is LIVE. Legacy mode skips it.
+  let riskScore: RiskScore | null = null;
+  if (args.prismMode === "fusion" && args.fusionRiskGate) {
+    riskScore = computeRiskScore(planContent, totalPreFetched);
+    console.log(`  [risk] ${summarizeRisk(riskScore)}  (shadow re: council; live re: agentic gate)`);
+  }
 
   // Build the council context: base brief + pre-fetched files with explicit instruction
   const baseContext = buildLocalContextString(context);
@@ -535,7 +705,6 @@ async function reviewPlan(
     };
   }
 
-  console.log(`  Synthesizing with Claude Opus... (estimated cost: $${estimatedSynthesisCost.toFixed(3)})`);
   const synthesisResponses = successful.map((r) => {
     const info = activeCouncilModels.find((m) => m.id === r.model);
     return {
@@ -546,15 +715,71 @@ async function reviewPlan(
     };
   });
 
-  const synthesis = await synthesizeDirect(
-    anthropicKey,
-    "opus",
-    planContent,
-    effectiveReviewPrompt,
-    synthesisResponses,
-    contextString,
-    synthesisPromptOverride
-  );
+  // ── Phase 4: agentic members (gated) ────────────────────────────────────────
+  // On HIGH-risk plans only, when --agentic is set, give 1–2 members repo-grep so a
+  // reviewer can verify ground-truth claims. Their findings join the council BEFORE
+  // the judge. Each is hard-capped (B12); a member that abstains/fails is dropped.
+  if (args.prismMode === "fusion" && args.fusionTwoStage && shouldRunAgentic(riskScore, args.fusionAgentic)) {
+    const agenticModels = activeCouncilModels.filter((m) => m.tier !== "free").slice(0, 2);
+    console.log(`  [agentic] HIGH risk + --agentic → running ${agenticModels.length} repo-aware member(s)`);
+    for (const m of agenticModels) {
+      try {
+        const finding = await runAgenticMember({
+          openrouterKey, modelId: m.id, planContent, repoRoot: context.repoRoot,
+        });
+        if (finding) {
+          synthesisResponses.push({ model: `agentic:${m.id}`, modelName: `${m.name} (repo-aware)`, family: "agentic", response: finding });
+          console.log(`    ✓ ${m.name} (repo-aware) contributed a ground-truth review`);
+        } else {
+          console.log(`    ⊘ ${m.name} (repo-aware) abstained`);
+        }
+      } catch (e) {
+        console.log(`    ✗ ${m.name} (repo-aware) failed: ${(e as Error).message.slice(0, 80)}`);
+      }
+    }
+  }
+
+  // ── Merge stage: legacy single-Opus OR fusion judge→synthesizer ─────────────
+  // Fusion runs ONLY under --prism-mode fusion with two-stage enabled. ANY fusion
+  // failure soft-falls-back to the legacy merge (tagged prism-fallback so it's
+  // visible) — it never blocks the plan from landing (Rollback: degraded-mode).
+  let synthesis: SynthesisResult;
+  let prismFallback: string | null = null;
+  let fusionInfo: FusionArtifacts | null = null;
+  const useFusion = args.prismMode === "fusion" && args.fusionTwoStage;
+
+  if (useFusion) {
+    try {
+      fusionInfo = await runFusionMerge({
+        openrouterKey,
+        planPath,
+        planContent,
+        reviewPrompt: effectiveReviewPrompt,
+        context: contextString,
+        synthesisResponses,
+        repoRoot: context.repoRoot,
+        synthesisPromptOverride,
+      });
+      synthesis = fusionInfo.synthesis;
+      console.log(`  [fusion] judge JSON → ${fusionInfo.judgeJsonRel} (evidence kept=${fusionInfo.evidenceKept} dropped=${fusionInfo.evidenceDropped}; citations dropped=${fusionInfo.citationsDropped}; sha=${fusionInfo.pinnedSha?.slice(0, 8) ?? "none"})`);
+    } catch (e) {
+      const detail = e instanceof JudgeError ? `${e.kind}: ${e.message}` : (e as Error).message;
+      // SOFT FALLBACK (context-gate T2 posture): run the legacy merge, tag it
+      // visibly so chronic fusion breakage isn't silent, never block the plan.
+      prismFallback = "legacy";
+      console.error(`  [fusion] ALERT judge/synthesizer failed (${detail}) — falling back to legacy single-Opus merge (prism-fallback: legacy)`);
+      synthesis = await synthesizeViaOpenRouter({
+        openrouterKey, content: planContent, analysisPrompt: effectiveReviewPrompt,
+        responses: synthesisResponses, context: contextString, customSynthesisInstructions: synthesisPromptOverride,
+      });
+    }
+  } else {
+    console.log(`  Synthesizing with ${OPENROUTER_SYNTHESIS_MODEL_ID} (via OpenRouter)... (estimated cost: $${estimatedSynthesisCost.toFixed(3)})`);
+    synthesis = await synthesizeViaOpenRouter({
+      openrouterKey, content: planContent, analysisPrompt: effectiveReviewPrompt,
+      responses: synthesisResponses, context: contextString, customSynthesisInstructions: synthesisPromptOverride,
+    });
+  }
 
   const durationSec = Math.round((Date.now() - startTime) / 1000);
   const totalInputTokens = responses.reduce((sum, r) => sum + (r.inputTokens ?? 0), 0);
@@ -574,6 +799,10 @@ async function reviewPlan(
     durationSec,
     outputPathOverride: args.outputPath,
     customReviewMode: reviewPromptOverride !== null,
+    prismMode: args.prismMode,
+    prismFallback,
+    riskScore,
+    fusion: fusionInfo,
   });
 
   // Record per-model telemetry for the `model-value` report. Best-effort: a telemetry
@@ -585,7 +814,7 @@ async function reviewPlan(
       contentHash,
       contextRepo: context.repoName,
       roster: args.roster ?? "default",
-      synthesisModel: SYNTHESIS_MODEL_IDS.opus,
+      synthesisModel: OPENROUTER_SYNTHESIS_MODEL_ID,
       durationSec,
       synthesis,
       responses,
@@ -604,7 +833,7 @@ async function reviewPlan(
       plan: path.basename(planPath),
       contextRepo: context.repoName,
       roster: args.roster ?? "default",
-      synthesisModel: SYNTHESIS_MODEL_IDS.opus,
+      synthesisModel: OPENROUTER_SYNTHESIS_MODEL_ID,
       durationSec,
       synthesis,
       responses,
@@ -651,6 +880,16 @@ function buildCouncil(
 async function main(): Promise<number> {
   const args = parseArgs();
 
+  // B14 compatibility matrix: agentic evidence flows through the judge JSON that only
+  // exists in two-stage mode, so --agentic --no-two-stage is invalid.
+  if (args.fusionAgentic && !args.fusionTwoStage) {
+    console.error("Error: --agentic requires the judge→synthesizer split (do not pass --no-two-stage with --agentic).");
+    process.exit(1);
+  }
+  if (args.prismMode === "fusion") {
+    console.log(`Prism mode: fusion (two-stage=${args.fusionTwoStage}, risk-gate=${args.fusionRiskGate}, agentic=${args.fusionAgentic})`);
+  }
+
   const openrouterKey = process.env.OPENROUTER_API_KEY || "";
   const anthropicKey = process.env.ANTHROPIC_API_KEY || "";
 
@@ -659,9 +898,13 @@ async function main(): Promise<number> {
       console.error("Error: OPENROUTER_API_KEY environment variable is required");
       process.exit(1);
     }
-    if (!anthropicKey) {
-      console.error("Error: ANTHROPIC_API_KEY environment variable is required");
-      process.exit(1);
+    // Synthesis now routes through OpenRouter (Fable 5), so ANTHROPIC_API_KEY is
+    // only needed for optional brief enhancement. If it's absent, degrade
+    // gracefully to a template-only brief rather than blocking the whole run —
+    // the empty-Anthropic-account failure mode is exactly what this fixes.
+    if (args.enhance && !anthropicKey) {
+      console.warn("Note: ANTHROPIC_API_KEY not set — using template-only brief (synthesis still runs via OpenRouter).");
+      args.enhance = false;
     }
   }
 
@@ -759,7 +1002,6 @@ async function main(): Promise<number> {
         context,
         args,
         openrouterKey,
-        anthropicKey,
         reviewPromptOverride,
         synthesisPromptOverride,
         councilForPlan!,
