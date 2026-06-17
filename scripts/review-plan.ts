@@ -13,8 +13,9 @@
  *   --no-enhance     Skip AI enhancement of the repo brief (use template only)
  *
  * Environment:
- *   OPENROUTER_API_KEY   Required
- *   ANTHROPIC_API_KEY    Required for synthesis + brief enhancement
+ *   OPENROUTER_API_KEY   Required — bills the ENTIRE pipeline (council fan-out,
+ *                        brief enhancement via Sonnet, and Opus synthesis). The
+ *                        Anthropic API is never called directly.
  */
 import * as fs from "fs";
 import * as path from "path";
@@ -944,21 +945,16 @@ async function main(): Promise<number> {
   }
 
   const openrouterKey = process.env.OPENROUTER_API_KEY || "";
-  const anthropicKey = process.env.ANTHROPIC_API_KEY || "";
 
   if (!args.dryRun) {
     if (!openrouterKey) {
       console.error("Error: OPENROUTER_API_KEY environment variable is required");
       process.exit(1);
     }
-    // Synthesis now routes through OpenRouter (Fable 5), so ANTHROPIC_API_KEY is
-    // only needed for optional brief enhancement. If it's absent, degrade
-    // gracefully to a template-only brief rather than blocking the whole run —
-    // the empty-Anthropic-account failure mode is exactly what this fixes.
-    if (args.enhance && !anthropicKey) {
-      console.warn("Note: ANTHROPIC_API_KEY not set — using template-only brief (synthesis still runs via OpenRouter).");
-      args.enhance = false;
-    }
+    // The ENTIRE pipeline — council fan-out, brief enhancement, AND synthesis —
+    // now bills to OPENROUTER_API_KEY. The Anthropic API is never called directly,
+    // so ANTHROPIC_API_KEY is no longer required for any step. (Enhancement uses
+    // anthropic/claude-sonnet-4-6 *via OpenRouter*; synthesis uses Opus via OpenRouter.)
   }
 
   // Load custom prompt files if provided.
@@ -1016,7 +1012,7 @@ async function main(): Promise<number> {
 
   const context = await buildLocalContext(repoRoot, {
     enhance: args.enhance && !args.dryRun,
-    anthropicKey,
+    openrouterKey,
   });
 
   console.log(`Context: ${context.tree.filter((f) => f.type === "file").length} files, ${Object.keys(context.keyFiles).length} key files`);
