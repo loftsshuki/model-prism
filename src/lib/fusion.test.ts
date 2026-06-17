@@ -3,6 +3,7 @@ import {
   evidenceId, judgeViaOpenRouter, synthesizeFromJudge, judgeToSynthesisFields,
   extractCitedIds, dropUnresolvedCitations, quoteSupported, tightenProse,
   JudgeResult, JudgeJsonSchema, coerceStrategicCategory, STRATEGIC_CATEGORIES,
+  renderDualLensSections, normalizeReviewForSnapshot,
   type JudgeResult as JudgeResultT,
 } from "./fusion";
 
@@ -122,6 +123,56 @@ describe("dual-lens schema (Phase 1)", () => {
       lockedDecisions: ["PARSER-TRUTH"], ...FAST,
     });
     expect(r.locked_decisions).toEqual(["PARSER-TRUTH"]);
+  });
+});
+
+describe("renderDualLensSections (Phase 2 / L7 / L8 / L9)", () => {
+  it("LEGACY byte-stability: undefined fields render ZERO lines", () => {
+    expect(renderDualLensSections({ criticalityHigh: false })).toEqual([]);
+    expect(renderDualLensSections({ criticalityHigh: true })).toEqual([]);
+  });
+
+  it("STRATEGIC always renders when the lens ran, even when empty", () => {
+    const out = renderDualLensSections({ strategicBlindSpots: [], criticalityHigh: false }).join("\n");
+    expect(out).toContain("Strategic Blind Spots — DO NOT SKIP");
+    expect(out).toContain("_No strategic blind spots surfaced._");
+  });
+
+  it("STRATEGIC orders findings high → medium → low (T9)", () => {
+    const out = renderDualLensSections({
+      strategicBlindSpots: [
+        { category: "i18n", gap: "low one", whyItMatters: "x", severity: "low" },
+        { category: "accessibility", gap: "high one", whyItMatters: "y", severity: "high" },
+        { category: "success-metrics", gap: "med one", whyItMatters: "z", severity: "medium" },
+      ],
+      criticalityHigh: false,
+    }).join("\n");
+    expect(out.indexOf("high one")).toBeLessThan(out.indexOf("med one"));
+    expect(out.indexOf("med one")).toBeLessThan(out.indexOf("low one"));
+  });
+
+  it("LOCKED renders the constraints block when non-empty", () => {
+    const out = renderDualLensSections({ lockedDecisions: ["Council stays at 10"], criticalityHigh: false }).join("\n");
+    expect(out).toContain("Locked Founder Decisions");
+    expect(out).toContain("1. Council stays at 10");
+  });
+
+  it("LOCKED warns when empty AND criticality:high (T7)", () => {
+    const out = renderDualLensSections({ lockedDecisions: [], criticalityHigh: true }).join("\n");
+    expect(out).toContain("⚠️ High-criticality plan with no locked decisions");
+  });
+
+  it("LOCKED omits silently when empty and NOT high-criticality", () => {
+    const out = renderDualLensSections({ lockedDecisions: [], criticalityHigh: false });
+    // No locked heading; only nothing (strategic absent here too).
+    expect(out.join("\n")).not.toContain("Locked Founder Decisions");
+    expect(out.join("\n")).not.toContain("⚠️");
+  });
+
+  it("normalizeReviewForSnapshot strips timestamps + SHAs for stable diffing", () => {
+    const a = "reviewed-at: 2026-06-17T19:43:06.320Z\npinned-sha: a1b2c3d4e5f6\n\n\nbody  ";
+    const b = "reviewed-at: 2026-01-01T00:00:00.000Z\npinned-sha: ffffffffffff\n\nbody";
+    expect(normalizeReviewForSnapshot(a)).toBe(normalizeReviewForSnapshot(b));
   });
 });
 

@@ -25,7 +25,7 @@ import { synthesizeViaOpenRouter, OPENROUTER_SYNTHESIS_MODEL_ID } from "../src/l
 // (single-Opus merge) is untouched and remains the default + permanent fallback.
 import {
   judgeViaOpenRouter, synthesizeFromJudge, JudgeError,
-  dropUnresolvedCitations, tightenProse,
+  dropUnresolvedCitations, tightenProse, renderDualLensSections,
   type JudgeResult,
 } from "../src/lib/fusion";
 import { computeRiskScore, summarizeRisk, type RiskScore } from "../src/lib/risk-score";
@@ -39,7 +39,7 @@ import {
 import { ModelInfo, ModelResponse, SynthesisResult } from "../src/lib/types";
 // Council rosters live in their own module so the freshness checker
 // (scripts/check-roster-freshness.ts) reads the exact rosters that run here.
-import { ROSTERS, resolveAutoRoster, AUTO_THRESHOLD_TOKENS } from "../src/lib/rosters";
+import { ROSTERS, resolveAutoRoster, AUTO_THRESHOLD_TOKENS, readCriticality } from "../src/lib/rosters";
 import { buildRunTelemetry } from "../src/lib/telemetry";
 import { appendRunTelemetry } from "../src/lib/telemetry-ledger";
 import { buildReviewRecord, appendReviewRecord, writeBrainDigest } from "../src/lib/review-ledger";
@@ -367,6 +367,16 @@ ${fusionBlock}---
     return info?.family ?? "unknown";
   })).size} architectures, synthesized with ${OPENROUTER_SYNTHESIS_MODEL_ID} (via OpenRouter).`);
   lines.push("");
+
+  // ── Dual-lens sections (renderer owns the headings — L9). Render ONLY when the
+  // dual-lens judge produced output: the SynthesisResult fields are `undefined` on
+  // legacy AND on fusion→legacy fallback, so those files stay byte-stable (L7). The
+  // logic is a pure, unit-tested helper (fusion.renderDualLensSections).
+  lines.push(...renderDualLensSections({
+    strategicBlindSpots: data.synthesis.strategicBlindSpots,
+    lockedDecisions: data.synthesis.lockedDecisions,
+    criticalityHigh: readCriticality(data.planContent) === "high",
+  }));
 
   // ⚖️ DECISION REQUIRED — lead with where the council SPLIT. A council's value isn't the
   // consensus (any one model gives you that) — it's the points strong models disagree on and
