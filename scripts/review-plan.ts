@@ -107,8 +107,8 @@ Options:
   --batch                    Process all .md plans in folder
   --force                    Re-review even if review exists with matching hash
   --dry-run                  Print what would run, no API calls
-  --max-cost N               Abort batch if cumulative cost > N dollars (default: 5)
-  --max-cost-per-plan N      Per-plan circuit breaker (default: 1.00)
+  --max-cost N               Abort batch if cumulative cost > N dollars (default: 30)
+  --max-cost-per-plan N      Per-plan circuit breaker (default: 6.00)
   --min-successful-models N  Require N successful responses before synthesis (default: 6)
   --no-enhance               Skip AI brief enhancement (use template only)
   --review-prompt <path>     Use a custom prompt for the 10-model fan-out instead of
@@ -177,8 +177,13 @@ Options:
     batch: argv.includes("--batch"),
     force: argv.includes("--force"),
     dryRun: argv.includes("--dry-run"),
-    maxCost: getNum("--max-cost", 5.0),
-    maxCostPerPlan: getNum("--max-cost-per-plan", 1.0),
+    // Raised for fusion-with-context (2026-06-17 unification): the dual-lens judge +
+    // synthesizer on a context-rich plan runs ~$1–2 (vs legacy's ~$0.13), so the old
+    // 1.00 per-plan cap tripped on context-heavy plans and degraded them to legacy
+    // fallback for a cost reason, not a quality one. 6.00 keeps a real runaway backstop
+    // (~4× a large real run) while clearing normal context-heavy fusion reviews.
+    maxCost: getNum("--max-cost", 30.0),
+    maxCostPerPlan: getNum("--max-cost-per-plan", 6.0),
     minSuccessfulModels: Math.floor(getNum("--min-successful-models", 6)),
     enhance: !argv.includes("--no-enhance"),
     reviewPromptPath: getStr("--review-prompt"),
