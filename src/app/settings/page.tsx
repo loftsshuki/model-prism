@@ -29,6 +29,10 @@ export default function SettingsPage() {
   const [anthropicKey, setAnthropicKey] = useState("");
   const [adminToken, setAdminToken] = useState("");
   const [synthesisModel, setSynthesisModel] = useState("sonnet");
+  // "anthropic" = legacy single call via the Anthropic API (needs the Anthropic key);
+  // "fusion" = judge → synthesizer via OpenRouter (needs only the OpenRouter key).
+  const [synthesisEngine, setSynthesisEngine] = useState<"anthropic" | "fusion">("fusion");
+  const [structuredCouncil, setStructuredCouncil] = useState(true);
   const [customTemplates, setCustomTemplates] = useState<PromptTemplate[]>([]);
   const [newName, setNewName] = useState("");
   const [newPrompt, setNewPrompt] = useState("");
@@ -63,6 +67,8 @@ export default function SettingsPage() {
       setAnthropicKey(getStoredKey("anthropic-api-key"));
       setAdminToken(getStoredKey("model-prism-admin-token"));
       setSynthesisModel(getStoredKey("synthesis-model") || "sonnet");
+      setSynthesisEngine((getStoredKey("synthesis-engine") as "anthropic" | "fusion") || "fusion");
+      setStructuredCouncil(getStoredKey("council-structured") !== "0");
       setGithubPat(getStoredKey("github-pat"));
       setCustomTemplates(getCustomTemplates());
       setCustomProfiles(getCustomProjectProfiles());
@@ -79,6 +85,8 @@ export default function SettingsPage() {
     localStorage.setItem("anthropic-api-key", anthropicKey);
     localStorage.setItem("model-prism-admin-token", adminToken);
     localStorage.setItem("synthesis-model", synthesisModel);
+    localStorage.setItem("synthesis-engine", synthesisEngine);
+    localStorage.setItem("council-structured", structuredCouncil ? "1" : "0");
     localStorage.setItem("github-pat", githubPat);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -228,6 +236,38 @@ export default function SettingsPage() {
                   Opus (deep, ~$0.10)
                 </button>
               </div>
+            </div>
+            <div>
+              <label className="block text-xs text-neutral-400 mb-1">Synthesis Engine</label>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setSynthesisEngine("fusion")}
+                  className={`text-xs px-4 py-2 rounded-lg border transition-colors ${
+                    synthesisEngine === "fusion"
+                      ? "border-violet-500 bg-violet-500/10 text-violet-200"
+                      : "border-neutral-800 bg-neutral-900 text-neutral-500 hover:border-neutral-700"
+                  }`}
+                >
+                  Fusion via OpenRouter (judge → synthesizer, strategic lens)
+                </button>
+                <button
+                  onClick={() => setSynthesisEngine("anthropic")}
+                  className={`text-xs px-4 py-2 rounded-lg border transition-colors ${
+                    synthesisEngine === "anthropic"
+                      ? "border-violet-500 bg-violet-500/10 text-violet-200"
+                      : "border-neutral-800 bg-neutral-900 text-neutral-500 hover:border-neutral-700"
+                  }`}
+                >
+                  Single call via Anthropic API
+                </button>
+              </div>
+              <p className="text-[11px] text-neutral-500 mt-1">Fusion bills everything to the OpenRouter key and is the same pipeline the CLI uses. The Anthropic option needs the Anthropic key above.</p>
+            </div>
+            <div>
+              <label className="flex items-center gap-2 text-xs text-neutral-400">
+                <input type="checkbox" checked={structuredCouncil} onChange={(e) => setStructuredCouncil(e.target.checked)} />
+                Ask council models for structured findings (severity, evidence, stable ids; enables computed consensus and feedback)
+              </label>
             </div>
           </div>
         </section>

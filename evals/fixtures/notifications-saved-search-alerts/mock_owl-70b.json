@@ -1,0 +1,48 @@
+{
+  "model": "mock/owl-70b",
+  "family": "owl",
+  "findings": [
+    {
+      "id": "f_b3010b2344dd",
+      "claim": "Unsubscribe by guessable integer id is unauthenticated; any user can be unsubscribed by a third party.",
+      "severity": "critical",
+      "category": "security",
+      "location": "app/api/unsubscribe/route.ts",
+      "evidence": "Sets `active = false` for that id",
+      "recommendation": "Signed token.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_4b732d45be1f",
+      "claim": "User email addresses and search params are written to console logs and Sentry breadcrumbs, leaking PII into third-party log storage.",
+      "severity": "high",
+      "category": "security",
+      "location": "app/api/cron/saved-search-alerts/route.ts",
+      "evidence": "console.log(`alerting ${user.email} for saved search ${s.id}",
+      "recommendation": "Log the user id only.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_44cd3b1ca47b",
+      "claim": "The alert history query filters notifications by user_id and sent_at with no index; at 2k saved searches the table grows by thousands of rows a day.",
+      "severity": "medium",
+      "category": "performance",
+      "location": "notifications",
+      "evidence": "No new indexes — the table starts empty",
+      "recommendation": "create index on notifications (user_id, sent_at desc).",
+      "confidence": "high"
+    },
+    {
+      "id": "f_8744a33cbd88",
+      "claim": "The cap of 10 active saved searches is enforced only in the route handler, not with a database constraint.",
+      "severity": "low",
+      "category": "correctness",
+      "location": "app/api/saved-searches/route.ts",
+      "evidence": "Cap at 10 active saved searches per user.",
+      "recommendation": "Add a trigger or check in a transaction.",
+      "confidence": "medium"
+    }
+  ],
+  "cost": 0.012,
+  "timeMs": 27900
+}

@@ -13,7 +13,10 @@
     "review-digest": "tsx scripts/review-digest.ts",
     "fusion-gate": "tsx scripts/fusion-gate-check.ts",
     "test": "node scripts/run-bun-tests.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "feedback": "tsx scripts/feedback.ts",
+    "post-pr-review": "tsx scripts/post-pr-review.ts",
+    "eval": "tsx scripts/eval.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.66",

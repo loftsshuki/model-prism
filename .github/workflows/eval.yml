@@ -1,0 +1,59 @@
+name: Eval
+
+# Scores the council against the golden plans in evals/golden (each seeded with
+# known flaws) and reports recall / precision / cost. The mock run replays recorded
+# fixtures and needs no secrets, so it always runs; the real run against OpenRouter
+# only runs when OPENROUTER_API_KEY is configured for the repository.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      roster:
+        description: "Council roster (src/lib/rosters.ts)"
+        type: choice
+        options: [cheap, default, frontier]
+        default: cheap
+      mode:
+        description: "Prism mode recorded on the summary"
+        type: choice
+        options: [fusion, legacy]
+        default: fusion
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    env:
+      ROSTER: ${{ inputs.roster || 'cheap' }}
+      MODE: ${{ inputs.mode || 'fusion' }}
+      # Secrets cannot be referenced in `if:` directly, and a step's own `env` is not
+      # visible to that step's `if:`, so the presence check is a job-level boolean.
+      HAS_OPENROUTER_KEY: ${{ secrets.OPENROUTER_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Mock eval (recorded fixtures, offline)
+        run: npm run eval -- --mock --roster "$ROSTER" --prism-mode "$MODE" --out .model-prism/evals/mock.json
+
+      - name: Real eval (OpenRouter)
+        if: ${{ env.HAS_OPENROUTER_KEY == 'true' }}
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: npm run eval -- --roster "$ROSTER" --prism-mode "$MODE" --out .model-prism/evals/real.json
+
+      - name: Upload summaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-summaries-${{ github.run_id }}
+          path: .model-prism/evals/*.json
+          if-no-files-found: warn

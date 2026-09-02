@@ -1,0 +1,74 @@
+{
+  "plan": "auth-magic-link.md",
+  "flaws": [
+    {
+      "id": "auth-missing-on-delete",
+      "severity": "critical",
+      "category": "security",
+      "description": "The DELETE /api/listings/[id] route is left unchanged with no session or role check, so anyone can delete listings",
+      "keywords": [
+        "delete",
+        "listings",
+        "auth|authoriz|authent|session|role check|unprotected|anyone"
+      ],
+      "location": "app/api/listings/[id]/route.ts"
+    },
+    {
+      "id": "service-role-key-in-client",
+      "severity": "critical",
+      "category": "security",
+      "description": "The Supabase service-role key is exposed as NEXT_PUBLIC_ and used from a client component, shipping it in the browser bundle",
+      "keywords": [
+        "service_role|service role|service-role",
+        "next_public|client|browser|bundle|exposed"
+      ],
+      "location": ".env.local"
+    },
+    {
+      "id": "open-redirect-next-param",
+      "severity": "high",
+      "category": "security",
+      "description": "The auth callback redirects to an unvalidated next query parameter, an open redirect usable in phishing",
+      "keywords": [
+        "redirect",
+        "next param|next query|`next`|next=|next parameter|get(\"next\")|next query string|next value",
+        "open redirect|validat|allowlist|whitelist|relative|same-origin|arbitrary|attacker"
+      ],
+      "location": "app/api/auth/callback/route.ts"
+    },
+    {
+      "id": "magic-link-token-no-expiry",
+      "severity": "high",
+      "category": "security",
+      "description": "Login tokens are stored in plaintext, never expire and are never consumed, so a leaked link logs in forever",
+      "keywords": [
+        "login token|login_tokens|magic link|magic-link|token",
+        "expir|ttl|single-use|one-time|reus|consumed|plaintext|hash|never invalidated|forever"
+      ],
+      "location": "login_tokens"
+    },
+    {
+      "id": "middleware-matcher-skips-api",
+      "severity": "high",
+      "category": "security",
+      "description": "The middleware matcher only covers /admin pages, so the assumption that API routes are gated by middleware is false and they stay reachable directly",
+      "keywords": [
+        "middleware",
+        "matcher|/admin/:path",
+        "api route|api/|directly|curl|bypass|not covered|does not cover"
+      ],
+      "location": "middleware.ts"
+    },
+    {
+      "id": "session-helper-does-not-exist",
+      "severity": "medium",
+      "category": "correctness",
+      "description": "The plan says to extend the existing src/lib/session.ts helper but the repo inventory shows no such file and the app has no auth today",
+      "keywords": [
+        "session.ts",
+        "exist|missing|not found|no such|not in the|absent|inventory"
+      ],
+      "location": "src/lib/session.ts"
+    }
+  ]
+}

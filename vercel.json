@@ -5,6 +5,15 @@
     },
     "src/app/api/synthesize/route.ts": {
       "maxDuration": 60
+    },
+    "src/app/api/jobs/work/route.ts": {
+      "maxDuration": 300
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/jobs/work",
+      "schedule": "* * * * *"
+    }
+  ]
 }

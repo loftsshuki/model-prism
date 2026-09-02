@@ -1,0 +1,53 @@
+{
+  "plan": "background-jobs-image-pipeline.md",
+  "flaws": [
+    {
+      "id": "job-claim-race",
+      "severity": "critical",
+      "category": "correctness",
+      "description": "Workers select queued jobs and then update them in separate statements, so two overlapping cron invocations claim and process the same job twice; needs FOR UPDATE SKIP LOCKED or an atomic claim",
+      "keywords": ["skip locked|for update|race|concurrent|overlap|twice|same job|double|atomic|claim", "job|worker|cron"],
+      "location": "app/api/cron/process-images/route.ts"
+    },
+    {
+      "id": "cron-route-unauthenticated",
+      "severity": "critical",
+      "category": "security",
+      "description": "The cron route has no CRON_SECRET or authorization check, so anyone who finds the URL can trigger expensive processing runs",
+      "keywords": ["cron", "secret|auth|unauthenticated|anyone|bearer|authorization|unprotected|public"],
+      "location": "app/api/cron/process-images/route.ts"
+    },
+    {
+      "id": "serverless-duration-assumption",
+      "severity": "high",
+      "category": "operations",
+      "description": "The plan assumes a 15-minute execution limit for Vercel cron functions, but the default serverless maxDuration is far lower, so 50 images per invocation will be cut off mid-batch",
+      "keywords": ["timeout|maxduration|max duration|duration limit|time limit|execution limit|15-minute|15 minute|cut off", "vercel|serverless|function|cron"],
+      "location": "app/api/cron/process-images/route.ts"
+    },
+    {
+      "id": "original-deleted-before-derivatives",
+      "severity": "high",
+      "category": "data",
+      "description": "The original upload is deleted immediately and the temp copy expires after one hour, so any job that fails or waits longer than an hour loses the photo permanently",
+      "keywords": ["delete|remove|lifecycle|expire|1-hour|one hour", "original|source|tmp|temp", "lost|permanent|irreversib|unrecoverable|before|derivative|fail"],
+      "location": "Storage hygiene"
+    },
+    {
+      "id": "no-retry-or-dead-letter",
+      "severity": "medium",
+      "category": "operations",
+      "description": "Transient failures such as storage timeouts mark the job failed forever with no retry, backoff or dead-letter handling, even though attempts and run_at exist",
+      "keywords": ["retry|retries|backoff|dead letter|dead-letter|requeue", "fail|failed|failure|transient"],
+      "location": "Failure handling"
+    },
+    {
+      "id": "missing-jobs-polling-index",
+      "severity": "medium",
+      "category": "performance",
+      "description": "The per-minute polling query filters image_jobs on status and run_at with no index, and the 180k-row backfill makes it a full scan every minute",
+      "keywords": ["index", "image_jobs|jobs", "status|run_at|poll|scan"],
+      "location": "image_jobs"
+    }
+  ]
+}

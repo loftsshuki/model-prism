@@ -1,0 +1,73 @@
+{
+  "plan": "notifications-saved-search-alerts.md",
+  "flaws": [
+    {
+      "id": "unsubscribe-no-token",
+      "severity": "critical",
+      "category": "security",
+      "description": "The unsubscribe endpoint takes a sequential integer id with no signed token, so anyone can unsubscribe every user by enumerating ids",
+      "keywords": [
+        "unsubscribe",
+        "token|signed|hmac|guess|enumerat|sequential|serial|anyone|authoriz|unauthenticated"
+      ],
+      "location": "app/api/unsubscribe/route.ts"
+    },
+    {
+      "id": "alerts-resent-on-partial-failure",
+      "severity": "high",
+      "category": "correctness",
+      "description": "last_run_at and sent_at are only advanced after the whole batch, so a crash, timeout or Resend error mid-loop re-sends every earlier email on the next run",
+      "keywords": [
+        "duplicate|re-send|resent|re-sent|sent twice|send twice|again|idempoten|repeat|sends every|every earlier|already sent",
+        "email|alert|notification",
+        "crash|timeout|partial|fail|mid-loop|mid loop|end of the batch|after the whole|last_run_at|sent_at"
+      ],
+      "location": "app/api/cron/saved-search-alerts/route.ts"
+    },
+    {
+      "id": "missing-notifications-index",
+      "severity": "medium",
+      "category": "performance",
+      "description": "The alert history query filters notifications by user_id and sent_at with no index; the table grows by thousands of rows per day",
+      "keywords": [
+        "index",
+        "notifications",
+        "user_id|sent_at|history|grow"
+      ],
+      "location": "notifications"
+    },
+    {
+      "id": "pii-in-logs",
+      "severity": "high",
+      "category": "security",
+      "description": "User email addresses and search parameters are written to console logs and Sentry breadcrumbs, leaking PII into third-party log storage",
+      "keywords": [
+        "logs|logging|logged|console.log|log line|sentry|breadcrumb",
+        "pii|personal|email address|user email|addresses|user.email|search params|search parameters"
+      ],
+      "location": "app/api/cron/saved-search-alerts/route.ts"
+    },
+    {
+      "id": "resend-key-in-client-component",
+      "severity": "critical",
+      "category": "security",
+      "description": "Preferences.tsx is a client component that instantiates Resend with RESEND_API_KEY, which either ships the secret to the browser or silently fails since non-NEXT_PUBLIC env vars are undefined on the client",
+      "keywords": [
+        "resend_api_key|api key|apikey|secret|credential",
+        "client component|use client|client-side|browser|bundle|preferences.tsx"
+      ],
+      "location": "app/account/Preferences.tsx"
+    },
+    {
+      "id": "email-template-does-not-exist",
+      "severity": "medium",
+      "category": "correctness",
+      "description": "The plan reuses src/emails/SavedSearchDigest.tsx as already existing, but the file inventory in the plan shows no src/emails directory",
+      "keywords": [
+        "savedsearchdigest|src/emails",
+        "exist|missing|not found|no such|absent|inventory|not present"
+      ],
+      "location": "src/emails/SavedSearchDigest.tsx"
+    }
+  ]
+}

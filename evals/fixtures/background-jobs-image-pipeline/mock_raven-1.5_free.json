@@ -1,0 +1,28 @@
+{
+  "model": "mock/raven-1.5:free",
+  "family": "raven",
+  "findings": [
+    {
+      "id": "f_45bf29c4de57",
+      "claim": "GET /api/cron/process-images is unprotected; add a secret header check.",
+      "severity": "critical",
+      "category": "security",
+      "location": "app/api/cron/process-images/route.ts",
+      "evidence": "does not need an auth check",
+      "recommendation": "Check CRON_SECRET.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_8aac3812d43c",
+      "claim": "The original is deleted before derivatives exist and the tmp lifecycle removes it after 1-hour, so failed jobs cannot recover the source image.",
+      "severity": "high",
+      "category": "data",
+      "location": "Storage hygiene",
+      "evidence": "1-hour lifecycle rule",
+      "recommendation": "Delete only after done.",
+      "confidence": "high"
+    }
+  ],
+  "cost": 0,
+  "timeMs": 40200
+}

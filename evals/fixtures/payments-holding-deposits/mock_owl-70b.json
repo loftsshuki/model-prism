@@ -1,0 +1,48 @@
+{
+  "model": "mock/owl-70b",
+  "family": "owl",
+  "findings": [
+    {
+      "id": "f_a4159b8e3401",
+      "claim": "Without signature verification the webhook endpoint trusts any POST body, letting an attacker activate holds without paying.",
+      "severity": "critical",
+      "category": "security",
+      "location": "app/api/stripe/webhook/route.ts",
+      "evidence": "Stripe posts JSON; parse directly",
+      "recommendation": "Verify the Stripe-Signature header.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_77074e178733",
+      "claim": "The check-then-insert in POST /api/holds is a race: simultaneous requests for one unit both see zero active holds. A unique partial index or serializable transaction is required.",
+      "severity": "critical",
+      "category": "correctness",
+      "location": "app/api/holds/route.ts",
+      "evidence": "const existing = await sql`select id from holds where unit_id = ${unitId} and status = 'active'`;",
+      "recommendation": "Enforce uniqueness in the database.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_ff95842514da",
+      "claim": "The plan assumes checkout.session.completed carries an expanded payment_intent with charges inline, but Stripe sends only the PaymentIntent id string and charges are not included, so pi.charges.data[0] throws.",
+      "severity": "medium",
+      "category": "correctness",
+      "location": "app/api/stripe/webhook/route.ts",
+      "evidence": "session.payment_intent gives us the PaymentIntent with its charges inline",
+      "recommendation": "Retrieve the PaymentIntent with expand: ['latest_charge'].",
+      "confidence": "high"
+    },
+    {
+      "id": "f_244abc3508e9",
+      "claim": "An hourly expiry cron means a 72-hour hold can stay active up to 59 minutes past expires_at, which brokers will notice.",
+      "severity": "low",
+      "category": "product",
+      "location": "Expiry",
+      "evidence": "Vercel cron (`0 * * * *`) hits `GET /api/cron/expire-holds`",
+      "recommendation": "Run every 5 minutes.",
+      "confidence": "medium"
+    }
+  ],
+  "cost": 0.0131,
+  "timeMs": 30800
+}

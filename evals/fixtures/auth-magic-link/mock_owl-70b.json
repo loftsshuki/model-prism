@@ -1,0 +1,48 @@
+{
+  "model": "mock/owl-70b",
+  "family": "owl",
+  "findings": [
+    {
+      "id": "f_1e7e8e4c759b",
+      "claim": "DELETE /api/listings/[id] stays unprotected: the plan explicitly leaves it unchanged, so anyone can delete listings without a session.",
+      "severity": "critical",
+      "category": "security",
+      "location": "app/api/listings/[id]/route.ts",
+      "evidence": "`DELETE /api/listings/[id]` — unchanged",
+      "recommendation": "Add the same getSession() role gate as PATCH and restrict DELETE to admin.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_2fcb2b2ba999",
+      "claim": "Exposing the service role key via NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY in a client component defeats RLS for every visitor who reads the bundle.",
+      "severity": "critical",
+      "category": "security",
+      "location": "app/admin/page.tsx",
+      "evidence": "it builds its Supabase client with the service-role key to bypass RLS for bulk edits",
+      "recommendation": "Move bulk edits to a server action using a server-only client.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_8c50f45649fa",
+      "claim": "Login tokens in login_tokens are stored in plaintext with no expiry and are never marked consumed, so a leaked magic link works forever and can be reused.",
+      "severity": "high",
+      "category": "security",
+      "location": "login_tokens",
+      "evidence": "Tokens stay in the table after use so support can see login history",
+      "recommendation": "Store a hash, add expires_at (15 min) and consumed_at, reject reuse.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_1350cb86413f",
+      "claim": "The middleware matcher only covers /admin/:path*, so the claim that API routes are gated by middleware is false — /api/listings can be called directly with curl.",
+      "severity": "high",
+      "category": "security",
+      "location": "middleware.ts",
+      "evidence": "export const config = { matcher: [\"/admin/:path*\"] };",
+      "recommendation": "Check the session inside every write route regardless of middleware.",
+      "confidence": "high"
+    }
+  ],
+  "cost": 0.0122,
+  "timeMs": 27100
+}

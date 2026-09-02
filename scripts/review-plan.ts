@@ -28,6 +28,7 @@ import {
   judgeViaOpenRouter, synthesizeFromJudge, JudgeError,
   dropUnresolvedCitations, tightenProse, renderDualLensSections,
   type JudgeResult, type PhaseUsage,
+  type JudgeExtras,
 } from "../src/lib/fusion";
 import { buildFusionTelemetry, appendFusionTelemetry } from "../src/lib/fusion-telemetry";
 import { computeRiskScore, summarizeRisk, type RiskScore } from "../src/lib/risk-score";
@@ -45,6 +46,13 @@ import { ROSTERS, resolveAutoRoster, AUTO_THRESHOLD_TOKENS, readCriticality } fr
 import { buildRunTelemetry } from "../src/lib/telemetry";
 import { appendRunTelemetry } from "../src/lib/telemetry-ledger";
 import { buildReviewRecord, appendReviewRecord, writeBrainDigest } from "../src/lib/review-ledger";
+import { clusterFindings, consensusBlock, classifyCluster, SaturationTracker, type FindingCluster, type MemberFindings } from "../src/lib/findings";
+import { checkGroundTruth, renderFactsBlock, markUnverifiedFindings, type GroundTruthReport } from "../src/lib/ground-truth";
+import { assignLenses, lensPrompt, lensCoverage } from "../src/lib/lenses";
+import { fileResponseCache, loadRunResponses, saveRunResponses, runResponsesPath, type CachedResponse } from "../src/lib/response-cache";
+import { summarizeSimilarity } from "../src/lib/similarity";
+import { compareReviews, parseFindingRefsFromReview, renderComparisonMarkdown, type ReviewComparison, type ReviewFindingRef } from "../src/lib/review-compare";
+import { runDebateRound, applyDebateToJudge, renderDebateMarkdown, type DebateResult } from "../src/lib/debate";
 
 // --- The review prompt ---
 
@@ -93,6 +101,16 @@ interface Args {
   fusionTwoStage: boolean;            // judge→synthesizer split (default ON in fusion)
   fusionRiskGate: boolean;            // structured risk scorer (default ON in fusion)
   fusionAgentic: boolean;             // repo-grep/web members on high-risk (default OFF)
+  // --- Council upgrades ---
+  structured: boolean;                // members return report_findings (default ON in fusion, OFF in legacy)
+  groundTruth: boolean;               // verify referenced paths/symbols/tables before the council (default ON)
+  lenses: boolean;                    // assign review lenses round-robin across families (--lenses)
+  cache: boolean;                     // content-addressed response cache (default ON; --no-cache)
+  resume: boolean;                    // reuse persisted council responses for this plan+prompt (--resume)
+  synthesizeOnly: boolean;            // never run the council; require persisted responses (--synthesize-only)
+  adaptive: boolean;                  // stop launching paid members once consensus saturates (--adaptive)
+  tiered: boolean;                    // cheap council first; escalate to the selected roster on high-severity findings (--tiered)
+  debate: boolean;                    // cross-examination round on judge contradictions (fusion; --debate)
 }
 
 // Merge-stage pricing for the circuit breaker (Opus 4.8 via OpenRouter, USD per 1M tokens).
@@ -149,6 +167,25 @@ Options:
   --agentic                  In fusion mode, allow repo-grep/web council members on
                              HIGH-risk plans (default OFF; requires two-stage). B14
                              invalid combo (--agentic --no-two-stage) is rejected.
+  --structured / --no-structured
+                             Council members return discrete findings (severity, evidence,
+                             stable ids) via a tool call instead of prose. Enables computed
+                             consensus, adaptive stop, feedback and review diffs.
+                             Default: ON in fusion mode, OFF in legacy.
+  --no-ground-truth          Skip the zero-cost pre-check that verifies every path / symbol /
+                             table the plan mentions against the repo (facts go to every model).
+  --lenses                   Assign review lenses (security, data, performance, testing, product,
+                             operations, correctness) round-robin across model families.
+  --no-cache                 Do not reuse cached council responses (.model-prism/cache).
+  --resume                   Reuse this plan's persisted council responses (same content+prompt)
+                             and go straight to the merge stage.
+  --synthesize-only          Like --resume but never runs the council; errors if nothing persisted.
+  --adaptive                 Stop launching paid members once the last 3 responses added no new
+                             finding clusters (needs --structured).
+  --tiered                   Run the cheap council first; escalate to the selected roster only
+                             when it finds critical/high issues or the plan is high-risk.
+  --debate                   Fusion: re-ask the models on each contested point to defend,
+                             concede, or refine before the synthesizer runs.
   --help                     Show this help
 `);
     process.exit(0);
@@ -202,7 +239,40 @@ Options:
     fusionTwoStage: !argv.includes("--no-two-stage"),
     fusionRiskGate: !argv.includes("--no-risk-gate"),
     fusionAgentic: argv.includes("--agentic"),
+    structured: argv.includes("--structured") ? true : argv.includes("--no-structured") ? false : getStr("--prism-mode") === "fusion",
+    groundTruth: !argv.includes("--no-ground-truth"),
+    lenses: argv.includes("--lenses"),
+    cache: !argv.includes("--no-cache"),
+    resume: argv.includes("--resume") || argv.includes("--synthesize-only"),
+    synthesizeOnly: argv.includes("--synthesize-only"),
+    adaptive: argv.includes("--adaptive"),
+    tiered: argv.includes("--tiered"),
+    debate: argv.includes("--debate"),
   };
+}
+
+// Persisted/cached council responses come back as plain records; rehydrate them
+// into the ModelResponse shape the rest of the pipeline expects.
+function cachedToModelResponse(c: CachedResponse): ModelResponse {
+  return {
+    model: c.model, modelName: c.modelName, status: "complete", response: c.response,
+    timeMs: c.timeMs, inputTokens: c.inputTokens, outputTokens: c.outputTokens, cost: 0,
+    finishReason: c.finishReason ?? null, findings: c.findings as ModelResponse["findings"], fromCache: true, lens: c.lens,
+  };
+}
+
+function toMemberFindings(responses: ModelResponse[], roster: ModelInfo[]): MemberFindings[] {
+  return responses
+    .filter((r) => r.status === "complete" && r.findings && r.findings.length > 0)
+    .map((r) => ({
+      model: r.model, modelName: r.modelName,
+      family: roster.find((m) => m.id === r.model)?.family ?? "unknown",
+      findings: r.findings!,
+    }));
+}
+
+function clustersToRefs(clusters: FindingCluster[]): ReviewFindingRef[] {
+  return clusters.map((c) => ({ id: c.id, claim: c.claim, severity: c.severity, category: c.category, location: c.location, models: c.models }));
 }
 
 // --- Prompt file loader ---
@@ -312,6 +382,17 @@ interface ReviewData {
   prismFallback?: string | null;
   riskScore?: RiskScore | null;
   fusion?: FusionArtifacts | null;
+  // Council upgrades (all optional so legacy output stays byte-stable)
+  clusters?: FindingCluster[];
+  totalFamilies?: number;
+  comparison?: ReviewComparison | null;
+  debate?: DebateResult | null;
+  groundTruth?: GroundTruthReport | null;
+  cachedCount?: number;
+  skippedCount?: number;
+  tiered?: { escalated: boolean; reason: string } | null;
+  lensCoverage?: Record<string, number> | null;
+  totalCost?: number;
 }
 
 function writeReviewFile(data: ReviewData): string {
@@ -353,6 +434,18 @@ function writeReviewFile(data: ReviewData): string {
       fusionLines.push(`evidence-dropped: ${data.fusion.evidenceDropped}`);
       fusionLines.push(`citations-dropped: ${data.fusion.citationsDropped}`);
     }
+  }
+  // Council-upgrade frontmatter: only when structured mode ran, so legacy files are unchanged.
+  if (data.clusters) {
+    fusionLines.push(`structured: true`);
+    fusionLines.push(`finding-clusters: ${data.clusters.length}`);
+    if (data.groundTruth) fusionLines.push(`ground-truth: ${data.groundTruth.found} found / ${data.groundTruth.missing} missing / ${data.groundTruth.ambiguous} ambiguous`);
+    if (data.cachedCount) fusionLines.push(`cached-responses: ${data.cachedCount}`);
+    if (data.skippedCount) fusionLines.push(`skipped-saturated: ${data.skippedCount}`);
+    if (data.tiered) fusionLines.push(`tiered: ${data.tiered.escalated ? "escalated" : "cheap-only"}`);
+    if (data.debate) fusionLines.push(`debate-topics: ${data.debate.exchanges.length}`);
+    if (data.comparison) fusionLines.push(`since-last-review: ${data.comparison.resolved.length} resolved / ${data.comparison.new.length} new / ${data.comparison.persisting.length} persisting`);
+    if (typeof data.totalCost === "number") fusionLines.push(`cost-usd: ${data.totalCost.toFixed(4)}`);
   }
   const fusionBlock = fusionLines.length ? fusionLines.join("\n") + "\n" : "";
 
@@ -425,6 +518,31 @@ ${fusionBlock}---
     lines.push("");
   }
 
+  // Computed council findings (structured mode). Deterministic, family-weighted; the
+  // line format is parsed back by review-compare on the next run.
+  if (data.clusters && data.clusters.length > 0) {
+    const total = data.totalFamilies ?? 1;
+    lines.push("## 🧮 Council Findings — computed consensus");
+    lines.push("");
+    lines.push(`_${data.clusters.length} finding cluster(s) from ${total} model families, clustered deterministically by claim similarity. Support counts are facts, not the synthesizer's impression._`);
+    lines.push("");
+    const shown = data.clusters.slice(0, 40);
+    for (const c of shown) {
+      const kind = classifyCluster(c, total);
+      const unverified = c.findings.some((f) => f.unverified) ? " ⚠ unverified" : "";
+      lines.push(`- **[${c.severity}] [${c.category}]** ${c.claim}${c.location ? ` _(${c.location})_` : ""} \`${c.id}\` — ${kind}, ${c.families.length}/${total} families (${c.models.join(", ")})${unverified}`);
+    }
+    if (data.clusters.length > shown.length) lines.push(`- _…${data.clusters.length - shown.length} lower-support clusters in the findings JSON._`);
+    lines.push("");
+  }
+
+  if (data.comparison) {
+    const cmp = renderComparisonMarkdown(data.comparison);
+    if (cmp) { lines.push(cmp); lines.push(""); }
+  }
+
+  lines.push(...renderDebateMarkdown(data.debate ?? null));
+
   // Master document
   if (data.synthesis.masterDocument) {
     lines.push("## Master Synthesis");
@@ -478,13 +596,19 @@ ${fusionBlock}---
     }
   }
 
-  // Failed models
-  if (failedModels.length > 0) {
+  // Failed models (saturation skips are listed separately: they are a feature, not a failure)
+  const skipped = failedModels.filter((f) => f.errorCode === "skipped");
+  const reallyFailed = failedModels.filter((f) => f.errorCode !== "skipped");
+  if (reallyFailed.length > 0) {
     lines.push("## Failed Models");
     lines.push("");
-    for (const f of failedModels) {
+    for (const f of reallyFailed) {
       lines.push(`- **${f.modelName}**: ${f.error}`);
     }
+    lines.push("");
+  }
+  if (skipped.length > 0) {
+    lines.push(`_Not launched (consensus saturated): ${skipped.map((f) => f.modelName).join(", ")}_`);
     lines.push("");
   }
 
@@ -509,6 +633,7 @@ interface FusionArtifacts {
   evidenceDropped: number;
   citationsDropped: number;
   phases: PhaseUsage[];           // per-phase usage for Component E telemetry
+  debate: DebateResult | null;
 }
 
 // Persist the (SHA-verified) judge JSON to a content-addressed path so re-runs and
@@ -553,6 +678,8 @@ async function runFusionMerge(opts: {
   synthesisResponses: Array<{ model: string; modelName: string; family: string; response: string }>;
   repoRoot: string;
   synthesisPromptOverride: string | null;
+  extras?: JudgeExtras;
+  debate?: boolean;
 }): Promise<FusionArtifacts> {
   // (B2/B3) Pin the SHA at judge-invocation time — citations resolve against THIS
   // commit, not the dirty working tree (line numbers drift while a plan is edited).
@@ -579,15 +706,34 @@ async function runFusionMerge(opts: {
     reviewPrompt: opts.reviewPrompt,
     context: opts.context,
     lockedDecisions,
+    extras: opts.extras,
     onUsage,
   });
 
   // Accuracy-aware integrity: drop repo citations that don't resolve/aren't supported
   // against the pinned SHA. model:/draft citations are transcript-authored, kept.
   const verification = verifyJudgeEvidence(judge, opts.repoRoot, pinnedSha);
-  const filteredJudge: JudgeResult = { ...judge, evidence: verification.kept };
+  let filteredJudge: JudgeResult = { ...judge, evidence: verification.kept };
   if (verification.dropped.length > 0) {
     console.log(`  [fusion] dropped ${verification.dropped.length} unverifiable citation(s): ${verification.dropped.map((d) => d.reason).join(",")}`);
+  }
+
+  // Cross-examination: each side of a contested point defends, concedes, or refines
+  // with evidence. Resolved topics move into consensus before the synthesizer runs.
+  let debate: DebateResult | null = null;
+  if (opts.debate && filteredJudge.contradictions.length > 0) {
+    console.log(`  [debate] re-examining ${Math.min(filteredJudge.contradictions.length, 6)} contested point(s)...`);
+    debate = await runDebateRound({
+      openrouterKey: opts.openrouterKey,
+      judge: filteredJudge,
+      draft: opts.planContent,
+      facts: opts.extras?.facts,
+      resolveModel: (m) => m.replace(/^agentic:/, ""),
+      onReply: (topic, model, reply, error) => console.log(`    ${reply ? `${reply.verdict.padEnd(7)}` : "✗      "} ${model} — ${topic.slice(0, 60)}${error ? ` [${error.slice(0, 60)}]` : ""}`),
+    });
+    phases.push({ phase: "critic", model: "debate", inputTokens: 0, outputTokens: 0, cost: debate.cost, attempts: 1 });
+    filteredJudge = applyDebateToJudge(filteredJudge, debate);
+    console.log(`  [debate] ${debate.exchanges.filter((e) => e.resolved).length}/${debate.exchanges.length} resolved ($${debate.cost.toFixed(3)})`);
   }
 
   const judgeJsonRel = persistJudgeJson(opts.planPath, filteredJudge, {
@@ -616,6 +762,7 @@ async function runFusionMerge(opts: {
     evidenceDropped: verification.dropped.length,
     citationsDropped: citationsDropped.length,
     phases,
+    debate,
   };
 }
 
@@ -694,35 +841,159 @@ async function reviewPlan(
   // Use custom review prompt if provided, otherwise built-in plan-review prompt.
   const effectiveReviewPrompt = reviewPromptOverride ?? REVIEW_PROMPT;
 
-  const freeCount = activeCouncilModels.filter((m) => m.tier === "free").length;
-  const paidCount = activeCouncilModels.length - freeCount;
-  console.log(`  Fanning out to ${activeCouncilModels.length} council models (${freeCount} free + ${paidCount} paid)...`);
   const startTime = Date.now();
 
-  let completedCount = 0;
-  const responses = await fanOut({
-    models: activeCouncilModels,
-    content: planContent,
-    prompt: effectiveReviewPrompt,
-    apiKey: openrouterKey,
-    runId: null,
-    maxTokens: 4096,
-    isAborted: () => false,
-    context: contextString,
-    onUpdate: (modelId, resp) => {
-      if (resp.status === "complete" || resp.status === "error") {
-        completedCount++;
-        const info = activeCouncilModels.find((m) => m.id === modelId);
-        const symbol = resp.status === "complete" ? "✓" : "✗";
-        const suffix = resp.status === "error" && resp.error
-          ? `  [${resp.error.slice(0, 80)}]`
-          : resp.finishReason === "length"
-            ? "  [warning: review cut off by max_tokens]"
-            : "";
-        process.stdout.write(`    ${symbol} ${info?.name ?? modelId} (${completedCount}/${activeCouncilModels.length})${suffix}\n`);
-      }
-    },
-  });
+  // ── Ground truth (zero LLM cost): verify every path/symbol/table the plan names ──
+  let groundTruth: GroundTruthReport | null = null;
+  let factsBlock = "";
+  if (args.groundTruth) {
+    groundTruth = checkGroundTruth(planContent, context.repoRoot, { planPath: path.relative(context.repoRoot, planPath).replace(/\\/g, "/") });
+    factsBlock = renderFactsBlock(groundTruth);
+    if (groundTruth.refs.length > 0) {
+      console.log(`  [ground-truth] ${groundTruth.found} found / ${groundTruth.missing} missing / ${groundTruth.ambiguous} ambiguous (${groundTruth.durationMs}ms)`);
+      for (const r of groundTruth.refs.filter((x) => x.status === "missing").slice(0, 8)) console.log(`    ✗ ${r.kind} ${r.name} — not in repo`);
+    }
+  }
+  // Facts precede the context for every council member, the judge, and the synthesizer.
+  const councilContext = factsBlock ? `${factsBlock}\n\n${contextString}` : contextString;
+
+  // ── Council: persisted (resume) → cache → structured / lenses / adaptive / tiered ──
+  const planSlug = path.basename(planPath, ".md");
+  const persistedPath = runResponsesPath(path.dirname(reviewPath), planSlug, contentHash);
+  const promptHash = hashContent(effectiveReviewPrompt);
+  const structured = args.structured;
+  const cache = args.cache ? fileResponseCache() : undefined;
+  const tracker = new SaturationTracker();
+  let responses: ModelResponse[];
+  let tieredInfo: { escalated: boolean; reason: string } | null = null;
+  let lensCov: Record<string, number> | null = null;
+
+  const runCouncilStage = async (models: ModelInfo[], label: string): Promise<ModelResponse[]> => {
+    const freeCount = models.filter((m) => m.tier === "free").length;
+    const paidCount = models.length - freeCount;
+    const lensMap = args.lenses ? assignLenses(models) : null;
+    if (lensMap) {
+      lensCov = { ...(lensCov ?? {}), ...lensCoverage(lensMap) };
+      console.log(`  [lenses] ${[...new Set([...lensMap.values()].map((l) => l.name))].join(", ")}`);
+    }
+    console.log(`  Fanning out to ${models.length} ${label} models (${freeCount} free + ${paidCount} paid)${structured ? ", structured findings" : ""}${cache ? ", cache on" : ""}...`);
+    let completedCount = 0;
+    return fanOut({
+      models,
+      content: planContent,
+      prompt: effectiveReviewPrompt,
+      promptFor: lensMap ? (m) => { const l = lensMap.get(m.id); return l ? lensPrompt(effectiveReviewPrompt, l) : effectiveReviewPrompt; } : undefined,
+      apiKey: openrouterKey,
+      runId: null,
+      maxTokens: structured ? 6000 : 4096,
+      isAborted: () => false,
+      context: councilContext,
+      structured,
+      cache,
+      // Adaptive sizing: once the last responses added no new clusters, stop launching
+      // paid members (free ones still run — they cost nothing but time).
+      shouldLaunch: args.adaptive && structured
+        ? (m) => m.tier === "free" || !tracker.isSaturated()
+        : undefined,
+      // Waves of 2 so saturation is observable before the whole paid tier is committed.
+      paidConcurrency: args.adaptive && structured ? 2 : undefined,
+      onUpdate: (modelId, resp) => {
+        if (resp.status === "complete" || resp.status === "error") {
+          completedCount++;
+          const info = models.find((m) => m.id === modelId);
+          if (resp.status === "complete") {
+            if (lensMap) resp.lens = lensMap.get(modelId)?.id;
+            if (resp.findings?.length) {
+              if (groundTruth) resp.findings = markUnverifiedFindings(resp.findings, groundTruth);
+              const added = tracker.add({ model: modelId, modelName: resp.modelName, family: info?.family ?? "unknown", findings: resp.findings });
+              process.stdout.write(`    ✓ ${info?.name ?? modelId} (${completedCount}/${models.length}) ${resp.findings.length} findings, +${added} new cluster(s)${resp.fromCache ? " [cache]" : ""}\n`);
+              return;
+            }
+          }
+          const symbol = resp.status === "complete" ? "✓" : resp.errorCode === "skipped" ? "⊘" : "✗";
+          const suffix = resp.status === "error" && resp.error
+            ? `  [${resp.error.slice(0, 80)}]`
+            : resp.finishReason === "length"
+              ? "  [warning: review cut off by max_tokens]"
+              : resp.fromCache ? "  [cache]" : "";
+          process.stdout.write(`    ${symbol} ${info?.name ?? modelId} (${completedCount}/${models.length})${suffix}\n`);
+        }
+      },
+    });
+  };
+
+  const persisted = args.resume ? loadRunResponses(persistedPath) : null;
+  if (persisted && persisted.promptHash === promptHash && persisted.responses.length > 0) {
+    responses = persisted.responses.map(cachedToModelResponse);
+    for (const r of responses) if (r.findings?.length) tracker.add({ model: r.model, modelName: r.modelName, family: activeCouncilModels.find((m) => m.id === r.model)?.family ?? "unknown", findings: r.findings });
+    console.log(`  Reusing ${responses.length} persisted council response(s) from ${path.relative(process.cwd(), persistedPath)} (saved ${persisted.savedAt})`);
+  } else if (args.synthesizeOnly) {
+    return { skipped: false, error: `--synthesize-only: no persisted council responses for this plan+prompt at ${path.relative(process.cwd(), persistedPath)}`, cost: 0 };
+  } else if (args.tiered) {
+    // Cheap council first; escalate to the selected roster only when the cheap tier
+    // found something serious (or the plan is high-risk). Most plans stop at tier one.
+    const excluded = new Set(args.excludeModels);
+    const cheapModels = ROSTERS.cheap.filter((m) => !excluded.has(m.id));
+    const stage1 = await runCouncilStage(cheapModels, "cheap-tier");
+    const stage1Clusters = clusterFindings(toMemberFindings(stage1, cheapModels));
+    const serious = stage1Clusters.filter((c) => (c.severity === "critical" || c.severity === "high") && c.families.length >= 2);
+    const escalate = serious.length > 0 || riskScore?.tier === "high";
+    const reason = serious.length > 0 ? `${serious.length} critical/high cluster(s) with ≥2 families` : riskScore?.tier === "high" ? "high-risk plan" : "no critical/high consensus";
+    tieredInfo = { escalated: escalate, reason };
+    if (escalate) {
+      const cheapIds = new Set(cheapModels.map((m) => m.id));
+      const escalation = activeCouncilModels.filter((m) => !cheapIds.has(m.id));
+      console.log(`  [tiered] escalating to ${escalation.length} frontier model(s): ${reason}`);
+      const stage2 = escalation.length ? await runCouncilStage(escalation, "escalation") : [];
+      responses = [...stage1, ...stage2];
+    } else {
+      console.log(`  [tiered] staying on the cheap tier: ${reason}`);
+      responses = stage1;
+    }
+  } else {
+    responses = await runCouncilStage(activeCouncilModels, "council");
+  }
+
+  // Persist the paid council so a failed merge, quorum miss, or cap trip never
+  // throws it away (--resume / --synthesize-only rebuild from this file).
+  const completeResponses = responses.filter((r) => r.status === "complete" && r.response);
+  if (!persisted && completeResponses.length > 0) {
+    try {
+      saveRunResponses(persistedPath, {
+        version: 1, plan: path.basename(planPath), contentHash, promptHash, roster: resolvedRosterName, savedAt: new Date().toISOString(),
+        responses: completeResponses.map((r) => ({
+          model: r.model, modelName: r.modelName, family: activeCouncilModels.find((m) => m.id === r.model)?.family,
+          response: r.response!, findings: r.findings, inputTokens: r.inputTokens, outputTokens: r.outputTokens, cost: r.cost,
+          timeMs: r.timeMs, finishReason: r.finishReason ?? null, lens: r.lens, cachedAt: new Date().toISOString(),
+        })),
+      });
+    } catch (e) {
+      console.error(`  (could not persist council responses: ${e instanceof Error ? e.message : e})`);
+    }
+  }
+
+  // Computed consensus + similarity (deterministic, zero cost).
+  const rosterForFamilies = [...activeCouncilModels, ...ROSTERS.cheap];
+  const memberFindings = toMemberFindings(responses, rosterForFamilies);
+  const clusters = structured ? clusterFindings(memberFindings) : null;
+  const totalFamilies = new Set(completeResponses.map((r) => rosterForFamilies.find((m) => m.id === r.model)?.family ?? "unknown")).size;
+  const computedConsensus = clusters && clusters.length ? consensusBlock(clusters, totalFamilies) : "";
+  if (clusters) {
+    const kinds = { consensus: 0, contested: 0, unique: 0 };
+    for (const c of clusters) kinds[classifyCluster(c, totalFamilies)]++;
+    console.log(`  [findings] ${clusters.length} cluster(s) from ${memberFindings.length} members / ${totalFamilies} families: ${kinds.consensus} consensus, ${kinds.contested} contested, ${kinds.unique} unique`);
+  }
+  const similarity = completeResponses.length >= 2
+    ? summarizeSimilarity(completeResponses.map((r) => ({ model: r.model, text: r.response! })))
+    : null;
+  if (similarity) {
+    console.log(`  [similarity] mean ${similarity.meanSimilarity.toFixed(2)}${similarity.redundant.length ? `; redundant: ${similarity.redundant.map((p) => `${p.a}~${p.b} (${p.score.toFixed(2)})`).join(", ")}` : ""}${similarity.mostDistinct ? `; most distinct: ${similarity.mostDistinct}` : ""}`);
+  }
+  const cachedCount = responses.filter((r) => r.fromCache).length;
+  const skippedCount = responses.filter((r) => r.errorCode === "skipped").length;
+  const judgeExtras: JudgeExtras = { computedConsensus: computedConsensus || undefined, facts: factsBlock || undefined };
+  // Legacy merge has no `extras` channel: the facts + consensus ride along in its context.
+  const mergeContext = [factsBlock, computedConsensus, contextString].filter(Boolean).join("\n\n");
 
   const fatal = responses.find((r) => r.errorCode === "auth" || r.errorCode === "payment");
   if (fatal && !responses.some((r) => r.status === "complete")) {
@@ -815,6 +1086,8 @@ async function reviewPlan(
         synthesisResponses,
         repoRoot: context.repoRoot,
         synthesisPromptOverride,
+        extras: judgeExtras,
+        debate: args.debate,
       });
       synthesis = fusionInfo.synthesis;
       console.log(`  [fusion] judge JSON → ${fusionInfo.judgeJsonRel} (evidence kept=${fusionInfo.evidenceKept} dropped=${fusionInfo.evidenceDropped}; citations dropped=${fusionInfo.citationsDropped}; sha=${fusionInfo.pinnedSha?.slice(0, 8) ?? "none"})`);
@@ -826,14 +1099,14 @@ async function reviewPlan(
       console.error(`  [fusion] ALERT judge/synthesizer failed (${detail}) — falling back to legacy single-Opus merge (prism-fallback: legacy)`);
       synthesis = await synthesizeViaOpenRouter({
         openrouterKey, content: planContent, analysisPrompt: effectiveReviewPrompt,
-        responses: synthesisResponses, context: contextString, customSynthesisInstructions: synthesisPromptOverride,
+        responses: synthesisResponses, context: mergeContext, customSynthesisInstructions: synthesisPromptOverride,
       });
     }
   } else {
     console.log(`  Synthesizing with ${OPENROUTER_SYNTHESIS_MODEL_ID} (via OpenRouter)... (estimated cost: ~$${estimatedMergeCost.toFixed(3)})`);
     synthesis = await synthesizeViaOpenRouter({
       openrouterKey, content: planContent, analysisPrompt: effectiveReviewPrompt,
-      responses: synthesisResponses, context: contextString, customSynthesisInstructions: synthesisPromptOverride,
+      responses: synthesisResponses, context: mergeContext, customSynthesisInstructions: synthesisPromptOverride,
     });
   }
 
@@ -843,6 +1116,26 @@ async function reviewPlan(
   console.log(`  Plan cost: $${totalPlanCost.toFixed(3)} (council $${councilCost.toFixed(3)} + merge ${fusionInfo ? "$" : "~$"}${mergeCost.toFixed(3)})`);
   const totalInputTokens = responses.reduce((sum, r) => sum + (r.inputTokens ?? 0), 0);
   const totalOutputTokens = responses.reduce((sum, r) => sum + (r.outputTokens ?? 0), 0);
+
+  // "Since last review": the existing review file (if any) is parsed BEFORE it is overwritten.
+  let comparison: ReviewComparison | null = null;
+  if (clusters && fs.existsSync(reviewPath)) {
+    try {
+      // Only the computed-findings section carries cluster ids; the synthesizer's own
+      // consensus/insight bullets would otherwise show up as spuriously "resolved".
+      const prevText = fs.readFileSync(reviewPath, "utf-8");
+      const sectionStart = prevText.indexOf("## 🧮 Council Findings");
+      const sectionEnd = sectionStart === -1 ? -1 : prevText.indexOf("\n## ", sectionStart + 1);
+      const prevSection = sectionStart === -1 ? "" : prevText.slice(sectionStart, sectionEnd === -1 ? undefined : sectionEnd);
+      const prevRefs = parseFindingRefsFromReview(prevSection);
+      if (prevRefs.length > 0) {
+        comparison = compareReviews(prevRefs, clustersToRefs(clusters));
+        console.log(`  [compare] ${comparison.resolved.length} resolved, ${comparison.new.length} new, ${comparison.persisting.length} persisting since last review`);
+      }
+    } catch (e) {
+      console.error(`  (could not compare with previous review: ${e instanceof Error ? e.message : e})`);
+    }
+  }
 
   const outputPath = writeReviewFile({
     planPath,
@@ -862,7 +1155,41 @@ async function reviewPlan(
     prismFallback,
     riskScore,
     fusion: fusionInfo,
+    clusters: clusters ?? undefined,
+    totalFamilies,
+    comparison,
+    debate: fusionInfo?.debate ?? null,
+    groundTruth,
+    cachedCount,
+    skippedCount,
+    tiered: tieredInfo,
+    lensCoverage: lensCov,
+    totalCost: totalPlanCost,
   });
+
+  // Findings export (structured mode): what post-pr-review and other tools consume.
+  if (clusters) {
+    const findingsPath = outputPath.replace(/\.md$/, "") + ".findings.json";
+    try {
+      fs.writeFileSync(findingsPath, JSON.stringify({
+        plan: path.basename(planPath), contentHash, reviewedAt: new Date().toISOString(), totalFamilies,
+        clusters: clusters.map((c) => ({
+          id: c.id, claim: c.claim, severity: c.severity, category: c.category, location: c.location,
+          families: c.families, models: c.models,
+          recommendation: c.findings.find((f) => f.recommendation)?.recommendation,
+          evidence: c.findings.find((f) => f.evidence)?.evidence,
+          unverified: c.findings.some((f) => f.unverified) || undefined,
+        })),
+        members: memberFindings.map((m) => ({ model: m.model, family: m.family, findings: m.findings })),
+        groundTruth: groundTruth ? { found: groundTruth.found, missing: groundTruth.missing, ambiguous: groundTruth.ambiguous, missingRefs: groundTruth.refs.filter((r) => r.status === "missing").map((r) => `${r.kind}:${r.name}`) } : null,
+        comparison: comparison ? { resolved: comparison.resolved.map((r) => r.id), new: comparison.new.map((r) => r.id), persisting: comparison.persisting.map((p) => p.current.id) } : null,
+        similarity: similarity ? { meanSimilarity: similarity.meanSimilarity, redundant: similarity.redundant } : null,
+      }, null, 2));
+      console.log(`  Findings JSON → ${path.relative(process.cwd(), findingsPath)}`);
+    } catch (e) {
+      console.error(`  (could not write findings JSON: ${e instanceof Error ? e.message : e})`);
+    }
+  }
 
   // Fusion run telemetry (Component E) — fallback-rate + cost-by-roster as a
   // CI-enforceable query (Phase-5 gates). Best-effort: never fail a completed review.
@@ -900,6 +1227,7 @@ async function reviewPlan(
       synthesis,
       responses,
       usedModels: activeCouncilModels,
+      similarity: similarity ? { pairs: similarity.pairs, meanSimilarity: similarity.meanSimilarity } : undefined,
     }));
   } catch (e) {
     console.error(`  (telemetry not recorded: ${e instanceof Error ? e.message : e})`);

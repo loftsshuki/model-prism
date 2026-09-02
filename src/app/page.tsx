@@ -7,7 +7,10 @@ import { DEFAULT_TEMPLATES, PromptTemplate } from "@/lib/prompts";
 import { DEFAULT_RUN_PRESETS, ModelSelectionPreset, selectModelsForPreset } from "@/lib/run-presets";
 import { getActiveProjectProfileId, getProjectProfiles, ProjectProfile, setActiveProjectProfileId } from "@/lib/project-profiles";
 import { fanOut, isRetryableFailure } from "@/lib/fan-out";
-import { SYNTHESIS_MODEL_IDS, synthesizeDirect } from "@/lib/synthesis";
+import { judgeViaOpenRouter, synthesizeFromJudge } from "@/lib/fusion";
+import { clusterFindings, consensusBlock } from "@/lib/findings";
+import { extractLockedDecisions } from "@/lib/locked-decisions";
+import { SYNTHESIS_MODEL_IDS, OPENROUTER_SYNTHESIS_MODEL_ID, synthesizeDirect } from "@/lib/synthesis";
 import { getContextPacks, getActivePackId, buildContextString } from "@/lib/context-packs";
 import { jsonHeaders } from "@/lib/client-api";
 import { parseDiffFiles, summarizeDiffFiles } from "@/lib/pr-review";
@@ -52,6 +55,14 @@ export default function Home() {
   const [synthesisModel, setSynthesisModel] = useState<"sonnet" | "opus">(() => {
     if (typeof window !== "undefined") return (localStorage.getItem("synthesis-model") as "sonnet" | "opus") || "opus";
     return "opus";
+  });
+  const [synthesisEngine] = useState<"anthropic" | "fusion">(() => {
+    if (typeof window !== "undefined") return (localStorage.getItem("synthesis-engine") as "anthropic" | "fusion") || "fusion";
+    return "fusion";
+  });
+  const [structuredCouncil] = useState<boolean>(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("council-structured") !== "0";
+    return true;
   });
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [responses, setResponses] = useState<Map<string, ModelResponse>>(new Map());
@@ -331,7 +342,8 @@ export default function Home() {
 
   const runSynthesis = useCallback(
     async (runId: string | null, completedResponses: ModelResponse[], durationSec = 0) => {
-      if (!anthropicKey) { setStatus("complete"); return; }
+      const useFusion = synthesisEngine === "fusion";
+      if (useFusion ? !apiKey : !anthropicKey) { setStatus("complete"); return; }
       setStatus("synthesizing");
       setSynthesisError(null);
       setSecondPassSynthesis(null);
@@ -344,10 +356,35 @@ export default function Home() {
       });
       try {
         const contextString = getContextString();
-        const result = await synthesizeDirect(anthropicKey, synthesisModel, content, prompt, responsesForSynthesis, contextString);
+        let result: SynthesisResult;
+        let modelId: string;
+        if (useFusion) {
+          // Same judge → synthesizer pipeline the CLI runs, in the browser via the
+          // OpenRouter key. Structured findings (when the council reported them)
+          // become a computed, family-weighted consensus block the judge must honour.
+          const members = successful.map((r) => {
+            const model = allModels.find((m) => m.id === r.model);
+            return { model: r.model, modelName: r.modelName, family: model?.family ?? "unknown", findings: r.findings ?? [] };
+          }).filter((m) => m.findings.length > 0);
+          const families = new Set(responsesForSynthesis.map((r) => r.family)).size;
+          const clusters = clusterFindings(members);
+          const judge = await judgeViaOpenRouter({
+            openrouterKey: apiKey,
+            draft: content,
+            responses: responsesForSynthesis,
+            reviewPrompt: prompt,
+            context: contextString,
+            lockedDecisions: extractLockedDecisions(content),
+            extras: clusters.length ? { computedConsensus: consensusBlock(clusters, families) } : undefined,
+          });
+          result = await synthesizeFromJudge({ openrouterKey: apiKey, judge, draft: content });
+          modelId = OPENROUTER_SYNTHESIS_MODEL_ID;
+        } else {
+          result = await synthesizeDirect(anthropicKey, synthesisModel, content, prompt, responsesForSynthesis, contextString);
+          modelId = SYNTHESIS_MODEL_IDS[synthesisModel];
+        }
         setSynthesis(result);
         // Save to DB and telemetry ledger in background
-        const modelId = SYNTHESIS_MODEL_IDS[synthesisModel];
         if (runId) {
           fetch("/api/synthesize/save", {
             method: "POST",
@@ -377,7 +414,7 @@ export default function Home() {
       }
       setStatus("complete");
     },
-    [activePack, anthropicKey, content, prompt, selectedRunPresetId, synthesisModel, allModels, getContextString]
+    [activePack, anthropicKey, apiKey, synthesisEngine, content, prompt, selectedRunPresetId, synthesisModel, allModels, getContextString]
   );
 
   const runSecondPass = useCallback(async () => {
@@ -524,6 +561,7 @@ Produce a revised masterDocument that starts with a direct verdict: APPROVE, APP
       maxTokens: 4096,
       isAborted: () => abortRef.current,
       signal: controller.signal,
+      structured: structuredCouncil,
       onUpdate,
       context: contextString,
     });
@@ -537,7 +575,7 @@ Produce a revised masterDocument that starts with a direct verdict: APPROVE, APP
       ...newResults,
     ];
     await runSynthesis(runId, allCompleted, Math.floor((Date.now() - runStartedAt) / 1000));
-  }, [content, prompt, selectedModels, apiKey, allModels, runSynthesis, responses, currentRunId, getContextString, activePack, contextEnabled, contextTokens, inputTokens, maxRunCost]);
+  }, [content, prompt, selectedModels, apiKey, allModels, runSynthesis, responses, currentRunId, getContextString, activePack, contextEnabled, contextTokens, inputTokens, maxRunCost, structuredCouncil]);
 
   const handleStop = useCallback(() => {
     abortRef.current = true;
@@ -584,6 +622,7 @@ Produce a revised masterDocument that starts with a direct verdict: APPROVE, APP
       maxTokens: 4096,
       isAborted: () => abortRef.current,
       signal: controller.signal,
+      structured: structuredCouncil,
       onUpdate,
       context: contextString,
     });
@@ -595,7 +634,7 @@ Produce a revised masterDocument that starts with a direct verdict: APPROVE, APP
       ...newResults,
     ];
     await runSynthesis(runId, allCompleted, Math.floor((Date.now() - runStartedAt) / 1000));
-  }, [apiKey, allModels, responses, currentRunId, content, prompt, runSynthesis, getContextString]);
+  }, [apiKey, allModels, responses, currentRunId, content, prompt, runSynthesis, getContextString, structuredCouncil]);
 
   const completedCount = [...responses.values()].filter((r) => r.status === "complete" || r.status === "error").length;
   const totalCount = responses.size;
@@ -926,6 +965,7 @@ Produce a revised masterDocument that starts with a direct verdict: APPROVE, APP
               <div className="mb-8 space-y-8">
                 <SynthesisView
                   synthesis={synthesis}
+                  runId={currentRunId}
                   onSecondPass={runSecondPass}
                   secondPassLoading={secondPassLoading}
                 />
@@ -985,7 +1025,7 @@ Produce a revised masterDocument that starts with a direct verdict: APPROVE, APP
 
                   {status === "complete" && (
                     <div className="flex items-center gap-2">
-                      {!synthesis && anthropicKey && successCount >= 2 && (
+                      {!synthesis && (synthesisEngine === "fusion" ? apiKey : anthropicKey) && successCount >= 2 && (
                         <div className="flex items-center gap-3">
                           <button onClick={() => { setSynthesisError(null); runSynthesis(
                             currentRunId,
@@ -999,7 +1039,7 @@ Produce a revised masterDocument that starts with a direct verdict: APPROVE, APP
                           )}
                         </div>
                       )}
-                      {!synthesis && !anthropicKey && (
+                      {!synthesis && !(synthesisEngine === "fusion" ? apiKey : anthropicKey) && (
                         <button onClick={() => setShowKeyInput(true)}
                           className="cta-text px-5 py-2 border border-green text-green hover:bg-green-light transition-colors duration-300">
                           Add Anthropic Key to Synthesize

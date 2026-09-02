@@ -100,6 +100,34 @@ The per-plan cap covers council spend plus the projected merge cost (one call fo
 
 The CLI writes review files next to plans under `reviews/` by default.
 
+## Council upgrades
+
+The council does more than fan out prose now. Each of these is a flag on `npm run review` (or a Settings toggle in the web app), and each is measured rather than assumed:
+
+| Capability | Flag | What it does |
+|---|---|---|
+| Structured findings | `--structured` (default in fusion) | Every member returns discrete findings via a tool call: claim, severity, category, verbatim evidence, fix, stable id. |
+| Computed consensus | automatic with structured | Findings are clustered across members by claim similarity and weighted by distinct model family. The judge is given the counts as facts. |
+| Ground truth | on by default, `--no-ground-truth` | Zero-cost pre-check: every path, symbol, table and env var the plan names is verified against the repo. Missing ones are flagged to every model and mark findings as unverified. |
+| Lenses | `--lenses` | Security, data and migrations, performance, testing, product, operations, correctness assigned round-robin across families. |
+| Cross-examination | `--debate` (fusion) | Models on each side of a contested point defend, concede or refine with evidence before the synthesizer runs. |
+| Adaptive stop | `--adaptive` | Stops launching paid members once the last three responses added no new finding clusters. |
+| Tiered review | `--tiered` | Runs the cheap council first and escalates to the selected roster only on critical or high findings with multi-family support, or a high-risk plan. |
+| Response cache | on by default, `--no-cache` | Content-addressed cache in `.model-prism/cache`: an unchanged (model, prompt, plan, context) tuple is never paid for twice. |
+| Resume | `--resume`, `--synthesize-only` | Council responses are persisted next to the review; a failed merge, quorum miss or cap trip can be retried without re-running the council. |
+| Since last review | automatic with structured | Findings keep stable ids, so a re-review reports resolved, new and persisting items. |
+| Findings export | automatic with structured | `<review>.findings.json` beside the review, consumed by `npm run post-pr-review` to post inline GitHub PR comments. |
+| Similarity | automatic | Pairwise response similarity per run; `npm run model-value` lists model pairs that are redundant across runs. |
+| Feedback | `npm run feedback`, thumbs in the web app | Votes per finding, keyed by stable id, weight the model-value leaderboard. |
+| Eval harness | `npm run eval` | Golden plans with seeded flaws; recall, precision, cost and latency per roster and mode. `--mock` runs offline. |
+| Server-side runs | `POST /api/jobs` | Durable review jobs advance one step per invocation on a cron worker; runs survive closed tabs and redeploys. |
+
+Recommended everyday invocation:
+
+```bash
+npm run review -- docs/plans/x.md -- --prism-mode fusion --lenses --debate --adaptive
+```
+
 ## Council rosters
 
 Rosters live in:
@@ -176,3 +204,34 @@ docs/OPERATIONS.md
 - Browser-stored keys are convenient for local/internal use, but they are not ideal for multi-user public deployments.
 - Context Packs intentionally block common credential files and secret-looking contents.
 - The legacy server-side routes remain for compatibility but should be removed once confirmed unused.
+
+## Server-side runs
+
+A run can also be executed entirely on the server so it survives closed tabs, function timeouts and redeploys. A job row in `review_jobs` holds the input and a JSON `step` (`pending`/`done`/`failed` model ids and the current `phase`); every worker invocation claims one job, advances it **one step**, writes the progress back, and re-schedules itself.
+
+Env vars:
+
+- `OPENROUTER_API_KEY` — server key the worker bills council, judge and synthesis calls to (the browser never sends a key for server-side runs; a missing key fails the job with a clear error).
+- `CRON_SECRET` — accepted by the worker as `Authorization: Bearer <secret>` (what Vercel cron sends) or `x-cron-secret`; also used for the worker's self-kick.
+- `MODEL_PRISM_ADMIN_TOKEN` — gates `POST/GET /api/jobs`, `GET /api/jobs/:id`, `POST /api/jobs/:id/cancel`, and is accepted by the worker as an alternative to the cron secret.
+- `MODEL_PRISM_BASE_URL` — optional; the origin the self-kick calls on non-Vercel hosts (on Vercel `VERCEL_URL` is used; request headers are deliberately not trusted).
+
+How a job advances (`src/lib/jobs.ts`):
+
+1. `POST /api/jobs` `{ content, prompt, models | roster, mode?, context? }` creates the `runs` row and a `queued` job, then fires a non-blocking kick at the worker.
+2. `POST|GET /api/jobs/work` claims the oldest unleased active job (`locked_until` lease of 5 minutes, single atomic `UPDATE … SKIP LOCKED`) and runs one phase within a 240 s budget:
+   - **council** — invokes pending models in batches (2 paid, or 1 free), saves each response to `responses`, keeps going until the budget tail; leftover models stay `pending` for the next invocation. When none remain the phase becomes `judge` (fusion) or `synth` (legacy).
+   - **judge** (fusion) — feeds the saved responses to the judge and stashes its output in `step.judge`.
+   - **synth** — legacy or fusion synthesis, saved to `syntheses`; the job is `completed` and `/runs/:runId` shows it like any other run.
+3. A thrown step is recorded (`attempts++`, `error`) and retried by the next invocation; after 3 failures the job is `failed`. Cancel via `POST /api/jobs/:id/cancel` (checked between council batches).
+4. If the job is not finished, the worker kicks itself again; the Vercel cron (`* * * * *`, `vercel.json`) is the fallback that resumes anything a timeout or redeploy interrupted.
+
+Trigger the worker manually:
+
+```bash
+curl -X POST "$BASE_URL/api/jobs/work" -H "Authorization: Bearer $CRON_SECRET"
+# or with the admin token
+curl -X POST "$BASE_URL/api/jobs/work" -H "x-model-prism-token: $MODEL_PRISM_ADMIN_TOKEN"
+```
+
+The hooks dashboard (`/hooks`) lists server-side runs with their phase, progress, cost and a Cancel button.

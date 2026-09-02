@@ -1,0 +1,38 @@
+{
+  "model": "mock/finch-mini",
+  "family": "finch",
+  "findings": [
+    {
+      "id": "f_2eb6eac0cdbc",
+      "claim": "Unsubscribe links carry a plain sequential id and no token, so they can be forged for any user.",
+      "severity": "critical",
+      "category": "security",
+      "location": "app/api/unsubscribe/route.ts",
+      "evidence": "unsubscribe: `https://luxapts.com/api/unsubscribe?id=${s.id}`",
+      "recommendation": "Sign the id.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_5e3fbd45b438",
+      "claim": "If Resend errors halfway through the loop, the next run sends the same alert email again to everyone processed before the failure because last_run_at is only updated at the end of the batch.",
+      "severity": "high",
+      "category": "correctness",
+      "location": "app/api/cron/saved-search-alerts/route.ts",
+      "evidence": "await sql`update saved_searches set last_run_at = now() where active`;",
+      "recommendation": "Advance last_run_at per search.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_439a37a07cc7",
+      "claim": "A 15-minute cron cannot meet the 30-minute alert target when one run overlaps the next.",
+      "severity": "low",
+      "category": "operations",
+      "location": "Alert cron",
+      "evidence": "every 15 minutes",
+      "recommendation": "Run every 5 minutes.",
+      "confidence": "low"
+    }
+  ],
+  "cost": 0.0018,
+  "timeMs": 12900
+}

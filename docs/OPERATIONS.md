@@ -78,6 +78,8 @@ Batch folder:
 npm run review -- path/to/repo/docs/plans -- --batch
 ```
 
+Council upgrades (see README "Council upgrades" for the full table): `--structured`, `--lenses`, `--debate`, `--adaptive`, `--tiered`, `--resume`, `--synthesize-only`, `--no-cache`, `--no-ground-truth`. Persisted council responses live under `<plan dir>/reviews/<plan>/<hash>.responses.json`; the response cache under `.model-prism/cache`.
+
 Recommended safety flags for automated hooks:
 
 ```bash

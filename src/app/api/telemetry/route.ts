@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { requireAdminToken } from "@/lib/api-auth";
 import { serverError } from "@/lib/api-validate";
-import { listRunTelemetry, saveRunTelemetry } from "@/lib/db";
+import { listFindingFeedback, listRunTelemetry, saveRunTelemetry } from "@/lib/db";
+import { summarizeFeedback } from "@/lib/feedback";
 import {
   aggregateModelValue,
   analyzeModelFailures,
@@ -32,8 +33,9 @@ export async function GET(req: NextRequest) {
   if (unauthorized) return unauthorized;
 
   try {
-    const runs = parseTelemetryRows(await listRunTelemetry());
-    const leaderboard = aggregateModelValue(runs);
+    const [rows, feedbackRows] = await Promise.all([listRunTelemetry(), listFindingFeedback().catch(() => [])]);
+    const runs = parseTelemetryRows(rows);
+    const leaderboard = aggregateModelValue(runs, summarizeFeedback(feedbackRows));
     return NextResponse.json({
       telemetryPath: "database:run_telemetry",
       runCount: runs.length,

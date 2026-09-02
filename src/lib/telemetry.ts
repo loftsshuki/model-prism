@@ -1,3 +1,4 @@
+import { feedbackWeight, type ModelFeedbackScore } from "./feedback";
 import { ModelInfo, ModelResponse, SynthesisResult } from "./types";
 
 // Per-run, per-model telemetry. This module intentionally stays pure (no filesystem
@@ -21,7 +22,14 @@ export interface ModelRunTelemetry {
   consensusSupports: number;
 }
 
+export interface RunSimilarity {
+  pairs: Array<{ a: string; b: string; score: number }>;
+  meanSimilarity: number;
+}
+
 export interface RunTelemetry {
+  /** Pairwise response similarity (local TF-IDF cosine) — redundant models show up as persistent high-score pairs. */
+  similarity?: RunSimilarity;
   ts: string;
   plan: string;
   contentHash: string;
@@ -47,6 +55,7 @@ function refMatches(ref: string, m: ModelInfo): boolean {
 }
 
 export interface BuildRunArgs {
+  similarity?: RunSimilarity;
   ts: string;
   plan: string;
   contentHash: string;
@@ -122,6 +131,7 @@ export function buildRunTelemetry(a: BuildRunArgs): RunTelemetry {
     synthesisModel: a.synthesisModel,
     durationSec: a.durationSec,
     models,
+    ...(a.similarity ? { similarity: a.similarity } : {}),
   };
 }
 
@@ -141,7 +151,9 @@ export interface ModelValueRow {
   consensusPerRun: number;
   totalCost: number;
   costPerInsight: number | null; // totalCost / weighted unique (gold), null if no gold
-  valueScore: number; // composite for ranking
+  valueScore: number; // composite for ranking (feedback-weighted when votes exist)
+  feedbackUp: number;
+  feedbackDown: number;
   verdict: string;
 }
 
@@ -169,7 +181,7 @@ function weightedUnique(m: ModelRunTelemetry): number {
 
 // Aggregate the ledger into one ranked row per model. The headline signal is
 // unique-insight rate (what a council is FOR); coverage and reliability shape the verdict.
-export function aggregateModelValue(runs: RunTelemetry[]): ModelValueRow[] {
+export function aggregateModelValue(runs: RunTelemetry[], feedback?: Record<string, ModelFeedbackScore>): ModelValueRow[] {
   const byId = new Map<string, ModelRunTelemetry[]>();
   const meta = new Map<string, { name: string; family: string; tier: string }>();
   for (const run of runs) {
@@ -197,11 +209,17 @@ export function aggregateModelValue(runs: RunTelemetry[]): ModelValueRow[] {
 
     // Composite value score: reward the gold (unique insight) most, then coverage, gated by
     // reliability. Free models that score well are the real bargains.
-    const valueScore = (uniquePerRun * 2 + (themeAvg ?? 0)) * (0.5 + 0.5 * successRate);
+    // Human feedback (thumbs per finding, rolled up per model) scales the score:
+    // the only non-model signal in the ranking, so it gets real weight once there
+    // are enough votes to trust it.
+    const fb = feedback?.[id];
+    const valueScore = (uniquePerRun * 2 + (themeAvg ?? 0)) * (0.5 + 0.5 * successRate) * feedbackWeight(fb);
 
     const info = meta.get(id)!;
     rows.push({
       id,
+      feedbackUp: fb?.up ?? 0,
+      feedbackDown: fb?.down ?? 0,
       name: info.name,
       family: info.family,
       tier: info.tier,

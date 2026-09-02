@@ -1,0 +1,53 @@
+{
+  "plan": "search-listings.md",
+  "flaws": [
+    {
+      "id": "sql-injection-dynamic-where",
+      "severity": "critical",
+      "category": "security",
+      "description": "User input is interpolated into a where clause that is executed dynamically via format(), which is SQL injection; parameters must be bound instead",
+      "keywords": ["inject|interpolat|parameteriz|bind|sanitiz|escape|dynamic sql|execute format", "where_clause|where clause|query|tsquery|sql|rpc"],
+      "location": "app/api/search/route.ts"
+    },
+    {
+      "id": "missing-gin-index",
+      "severity": "high",
+      "category": "performance",
+      "description": "The search_vector column has no GIN index, so every search sequentially scans and ranks tens of thousands of rows",
+      "keywords": ["gin|index", "search_vector|tsvector|full-text|full text|@@"],
+      "location": "listings.search_vector"
+    },
+    {
+      "id": "n-plus-one-amenities",
+      "severity": "high",
+      "category": "performance",
+      "description": "Amenities are fetched with one query per listing in a loop, an N+1 pattern that alone blows the 300 ms budget",
+      "keywords": ["n+1|n + 1|per listing|per-listing|loop|each listing|one query per", "amenit"],
+      "location": "app/api/search/route.ts"
+    },
+    {
+      "id": "unbounded-result-set",
+      "severity": "medium",
+      "category": "performance",
+      "description": "The function returns every matching row with no LIMIT and the API ships the full set to the client for client-side paging",
+      "keywords": ["limit|paginat|unbounded|page size|every matching|all matching|full result|entire result|whole result", "result|rows|listings|response"],
+      "location": "search_listings"
+    },
+    {
+      "id": "service-role-leaks-unpublished",
+      "severity": "critical",
+      "category": "security",
+      "description": "The search route uses the service-role client, bypassing RLS; combined with the injectable where clause any draft or private listing data is exposed",
+      "keywords": ["service role|service_role|service-role|admin client|createadminclient|rls|row level|bypass", "draft|unpublished|leak|expos|private|hidden|any row|all rows"],
+      "location": "app/api/search/route.ts"
+    },
+    {
+      "id": "ilike-btree-index-assumption",
+      "severity": "low",
+      "category": "performance",
+      "description": "A leading-wildcard ILIKE cannot use the lower(title) btree index; it needs pg_trgm or a prefix-only pattern",
+      "keywords": ["ilike|like", "btree|b-tree|index", "leading wildcard|%|trigram|pg_trgm|cannot use|can't use|won't use|will not use|not use|does not use|unable"],
+      "location": "app/api/search/route.ts"
+    }
+  ]
+}

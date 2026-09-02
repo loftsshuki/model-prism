@@ -75,11 +75,37 @@ export function toOpenRouterError(e: unknown): OpenRouterError {
   return new OpenRouterError("network", String(e), { retryable: true });
 }
 
+/** A text part; `cache_control` marks a prompt-caching breakpoint (honoured by Anthropic-hosted models on OpenRouter). */
+export interface TextPart {
+  type: "text";
+  text: string;
+  cache_control?: { type: "ephemeral" };
+}
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string;
+  content: string | TextPart[];
   tool_call_id?: string;
   tool_calls?: unknown[];
+}
+
+/** Build a message whose large shared prefix (codebase context) is a cached part and whose tail is not. */
+export function cachedPrefixMessage(role: ChatMessage["role"], cachedPrefix: string, tail: string): ChatMessage {
+  if (!cachedPrefix) return { role, content: tail };
+  return { role, content: [{ type: "text", text: cachedPrefix, cache_control: { type: "ephemeral" } }, { type: "text", text: tail }] };
+}
+
+/**
+ * OpenRouter provider routing preferences (https://openrouter.ai/docs/provider-routing).
+ * `sort: "throughput"` avoids the slow/flaky providers that drive free-tier fallbacks.
+ */
+export interface ProviderPreferences {
+  sort?: "price" | "throughput" | "latency";
+  order?: string[];
+  allow_fallbacks?: boolean;
+  require_parameters?: boolean;
+  data_collection?: "allow" | "deny";
+  ignore?: string[];
 }
 
 export interface ToolDefinition {
@@ -119,6 +145,8 @@ export interface ChatOptions {
   onDelta?: (text: string) => void;
   /** Shown in the OpenRouter dashboard. */
   title?: string;
+  /** Provider routing preferences. */
+  provider?: ProviderPreferences;
 }
 
 export const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -246,6 +274,7 @@ export async function openrouterChat(opts: ChatOptions): Promise<ChatResult> {
         ...(opts.tools ? { tools: opts.tools } : {}),
         ...(opts.toolChoice ? { tool_choice: opts.toolChoice } : {}),
         usage: { include: true },
+        ...(opts.provider ? { provider: opts.provider } : {}),
         stream,
         messages: opts.messages,
       }),

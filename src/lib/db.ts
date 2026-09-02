@@ -1,4 +1,7 @@
 import { neon } from "@neondatabase/serverless";
+import type { ModelInfo } from "./types";
+import type { ReviewJob, ReviewJobMode, ReviewJobPatch, ReviewJobStep } from "./job-types";
+import { emptyStep } from "./job-types";
 
 function getClient() {
   const url = process.env.DATABASE_URL;
@@ -93,6 +96,48 @@ export async function initDb() {
     )
   `;
 
+  // Human feedback on individual findings (thumbs up/down). Keyed by the stable
+  // finding id (hash of the normalized claim) so votes survive re-reviews and can
+  // be joined back to the models that raised the finding.
+  await sql`
+    CREATE TABLE IF NOT EXISTS finding_feedback (
+      id SERIAL PRIMARY KEY,
+      run_id TEXT,
+      finding_id TEXT NOT NULL,
+      claim TEXT,
+      section TEXT,
+      models TEXT,
+      vote INTEGER NOT NULL,
+      note TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS finding_feedback_finding_idx ON finding_feedback (finding_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS finding_feedback_run_idx ON finding_feedback (run_id)`;
+
+  // Durable server-side review runs: one row per job, advanced one step per
+  // worker invocation (see src/lib/jobs.ts). `step` is JSON progress; `locked_until`
+  // is the claim lease so concurrent workers never advance the same job.
+  await sql`
+    CREATE TABLE IF NOT EXISTS review_jobs (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      content TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      models TEXT NOT NULL,
+      mode TEXT NOT NULL DEFAULT 'legacy',
+      run_id TEXT REFERENCES runs(id),
+      context TEXT,
+      step TEXT NOT NULL,
+      cost REAL DEFAULT 0,
+      error TEXT,
+      attempts INTEGER DEFAULT 0,
+      locked_until TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+
   // Indexes for the per-run lookups (getRun, listRuns' join) and the history ordering.
   await sql`CREATE INDEX IF NOT EXISTS responses_run_id_idx ON responses (run_id)`;
   await sql`CREATE INDEX IF NOT EXISTS syntheses_run_id_idx ON syntheses (run_id, created_at DESC)`;
@@ -106,6 +151,10 @@ export async function initDb() {
     WHERE a.run_id = b.run_id AND a.model = b.model AND a.id < b.id
   `;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS responses_run_model_uidx ON responses (run_id, model)`;
+
+  // The worker claims the oldest active job: filter on status, order on created_at.
+  await sql`CREATE INDEX IF NOT EXISTS review_jobs_status_idx ON review_jobs (status)`;
+  await sql`CREATE INDEX IF NOT EXISTS review_jobs_created_at_idx ON review_jobs (created_at)`;
 
   initialized = true;
 }
@@ -296,4 +345,218 @@ export async function listRuns() {
     LIMIT 50
   `;
   return runs;
+}
+
+export interface FindingFeedbackRow {
+  run_id: string | null;
+  finding_id: string;
+  claim: string | null;
+  section: string | null;
+  models: string[];
+  vote: number;
+  note: string | null;
+  created_at: string;
+}
+
+export async function saveFindingFeedback(input: {
+  runId: string | null;
+  findingId: string;
+  claim?: string | null;
+  section?: string | null;
+  models?: string[] | null;
+  vote: 1 | -1;
+  note?: string | null;
+}) {
+  await initDb();
+  const sql = getClient();
+  await sql`
+    INSERT INTO finding_feedback (run_id, finding_id, claim, section, models, vote, note)
+    VALUES (${input.runId}, ${input.findingId}, ${input.claim ?? null}, ${input.section ?? null}, ${input.models ? JSON.stringify(input.models) : null}, ${input.vote}, ${input.note ?? null})
+  `;
+}
+
+export async function listFindingFeedback(opts: { runId?: string; limit?: number } = {}): Promise<FindingFeedbackRow[]> {
+  await initDb();
+  const sql = getClient();
+  const limit = opts.limit ?? 2000;
+  const rows = opts.runId
+    ? await sql`SELECT * FROM finding_feedback WHERE run_id = ${opts.runId} ORDER BY created_at DESC LIMIT ${limit}`
+    : await sql`SELECT * FROM finding_feedback ORDER BY created_at DESC LIMIT ${limit}`;
+  return rows.map((r) => ({
+    run_id: (r.run_id as string | null) ?? null,
+    finding_id: String(r.finding_id),
+    claim: (r.claim as string | null) ?? null,
+    section: (r.section as string | null) ?? null,
+    models: safeJson<string[]>(r.models, []),
+    vote: Number(r.vote),
+    note: (r.note as string | null) ?? null,
+    created_at: String(r.created_at),
+  }));
+}
+
+// --- Review jobs (durable server-side runs) ---
+
+/** How long one claim holds a job. A step that dies mid-way (timeout, redeploy) is re-claimable after this. */
+export const JOB_LOCK_MINUTES = 5;
+
+const REVIEW_JOB_LIST_LIMIT = 50;
+
+function toIso(value: unknown): string | null {
+  if (value == null) return null;
+  return value instanceof Date ? value.toISOString() : String(value);
+}
+
+// Row → typed job. JSON columns are parsed tolerantly (a corrupt `step` becomes an
+// empty council so the worker fails the job cleanly instead of crashing).
+function rowToReviewJob(row: Record<string, unknown>): ReviewJob {
+  return {
+    id: String(row.id),
+    status: String(row.status) as ReviewJob["status"],
+    content: String(row.content ?? ""),
+    prompt: String(row.prompt ?? ""),
+    models: safeJson<ModelInfo[]>(row.models, []),
+    mode: (row.mode === "fusion" ? "fusion" : "legacy") as ReviewJobMode,
+    run_id: String(row.run_id ?? ""),
+    context: typeof row.context === "string" ? row.context : null,
+    step: safeJson<ReviewJobStep>(row.step, emptyStep([])),
+    cost: Number(row.cost ?? 0),
+    error: typeof row.error === "string" ? row.error : null,
+    attempts: Number(row.attempts ?? 0),
+    locked_until: toIso(row.locked_until),
+    created_at: toIso(row.created_at) ?? "",
+    updated_at: toIso(row.updated_at) ?? "",
+  };
+}
+
+export async function enqueueReviewJob(input: {
+  id: string;
+  runId: string;
+  content: string;
+  prompt: string;
+  models: ModelInfo[];
+  mode: ReviewJobMode;
+  context?: string | null;
+}): Promise<ReviewJob> {
+  await initDb();
+  const sql = getClient();
+  // The run row is created first so responses/synthesis have a parent to attach to
+  // and the job shows up in history like a browser-driven run.
+  await createRun(input.runId, input.content, input.prompt, input.models.map((m) => m.id), null);
+  const step = emptyStep(input.models.map((m) => m.id));
+  const rows = await sql`
+    INSERT INTO review_jobs (id, status, content, prompt, models, mode, run_id, context, step, cost, attempts)
+    VALUES (${input.id}, 'queued', ${input.content}, ${input.prompt}, ${JSON.stringify(input.models)}, ${input.mode}, ${input.runId}, ${input.context ?? null}, ${JSON.stringify(step)}, 0, 0)
+    RETURNING *
+  `;
+  return rowToReviewJob(rows[0]);
+}
+
+/**
+ * Atomically claim the oldest job that is active and not leased. One statement so the
+ * Neon HTTP driver (no session/transaction) still gets an atomic claim; SKIP LOCKED
+ * keeps two workers from racing on the same row. A queued job becomes running here.
+ */
+export async function claimNextReviewJob(): Promise<ReviewJob | null> {
+  await initDb();
+  const sql = getClient();
+  const rows = await sql`
+    UPDATE review_jobs
+    SET locked_until = NOW() + (${JOB_LOCK_MINUTES}::int) * INTERVAL '1 minute',
+        status = CASE WHEN status = 'queued' THEN 'running' ELSE status END,
+        updated_at = NOW()
+    WHERE id = (
+      SELECT id FROM review_jobs
+      WHERE status IN ('queued', 'running', 'synthesizing')
+        AND (locked_until IS NULL OR locked_until < NOW())
+      ORDER BY created_at
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
+    )
+    RETURNING *
+  `;
+  return rows[0] ? rowToReviewJob(rows[0]) : null;
+}
+
+export async function updateReviewJob(id: string, patch: ReviewJobPatch): Promise<ReviewJob> {
+  await initDb();
+  const sql = getClient();
+  const extend = patch.lock === "extend";
+  // A cancel that lands while a step is running must win: the step's own writes
+  // (progress heartbeats, phase transitions) never resurrect a cancelled job.
+  const rows = await sql`
+    UPDATE review_jobs
+    SET status = CASE WHEN status = 'cancelled' THEN status ELSE ${patch.status} END,
+        step = ${JSON.stringify(patch.step)},
+        cost = ${patch.cost},
+        error = ${patch.error},
+        attempts = ${patch.attempts},
+        locked_until = CASE WHEN ${extend}::boolean THEN NOW() + (${JOB_LOCK_MINUTES}::int) * INTERVAL '1 minute' ELSE NULL END,
+        updated_at = NOW()
+    WHERE id = ${id}
+    RETURNING *
+  `;
+  if (!rows[0]) throw new Error(`Review job ${id} not found`);
+  return rowToReviewJob(rows[0]);
+}
+
+export async function getReviewJob(id: string): Promise<ReviewJob | null> {
+  await initDb();
+  const sql = getClient();
+  const rows = await sql`SELECT * FROM review_jobs WHERE id = ${id}`;
+  return rows[0] ? rowToReviewJob(rows[0]) : null;
+}
+
+export async function listReviewJobs(limit = REVIEW_JOB_LIST_LIMIT): Promise<ReviewJob[]> {
+  await initDb();
+  const sql = getClient();
+  const rows = await sql`
+    SELECT * FROM review_jobs
+    ORDER BY created_at DESC
+    LIMIT ${limit}
+  `;
+  return rows.map(rowToReviewJob);
+}
+
+/** Cancel an active job. Returns null when the job does not exist or already finished. */
+export async function cancelReviewJob(id: string): Promise<ReviewJob | null> {
+  await initDb();
+  const sql = getClient();
+  const rows = await sql`
+    UPDATE review_jobs
+    SET status = 'cancelled', locked_until = NULL, updated_at = NOW()
+    WHERE id = ${id} AND status IN ('queued', 'running', 'synthesizing')
+    RETURNING *
+  `;
+  return rows[0] ? rowToReviewJob(rows[0]) : null;
+}
+
+export interface RunResponseRow {
+  model: string;
+  model_name: string | null;
+  base_architecture: string | null;
+  response: string | null;
+  error: string | null;
+  cost: number | null;
+  time_ms: number | null;
+  created_at: string | null;
+}
+
+/** The council responses saved for a run (the worker feeds these to the judge/synthesizer). */
+export async function listRunResponses(runId: string): Promise<RunResponseRow[]> {
+  await initDb();
+  const sql = getClient();
+  const rows = await sql`
+    SELECT model, model_name, base_architecture, response, error, cost, time_ms, created_at
+    FROM responses WHERE run_id = ${runId} ORDER BY created_at
+  `;
+  return rows.map((row) => ({
+    model: String(row.model),
+    model_name: typeof row.model_name === "string" ? row.model_name : null,
+    base_architecture: typeof row.base_architecture === "string" ? row.base_architecture : null,
+    response: typeof row.response === "string" ? row.response : null,
+    error: typeof row.error === "string" ? row.error : null,
+    cost: row.cost == null ? null : Number(row.cost),
+    time_ms: row.time_ms == null ? null : Number(row.time_ms),
+    created_at: toIso(row.created_at),
+  }));
 }

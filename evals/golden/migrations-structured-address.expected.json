@@ -1,0 +1,53 @@
+{
+  "plan": "migrations-structured-address.md",
+  "flaws": [
+    {
+      "id": "drop-column-without-backfill",
+      "severity": "critical",
+      "category": "data",
+      "description": "address_raw is dropped in the same migration that adds the structured columns, before any backfill, so the source data for parsing is destroyed",
+      "keywords": ["drop|dropped|dropping|destroy", "address_raw|address", "backfill|data loss|lost|populate|parse|before"],
+      "location": "20260910_structured_address.sql"
+    },
+    {
+      "id": "rename-column-breaks-running-app",
+      "severity": "high",
+      "category": "operations",
+      "description": "Renaming price_text in one step while old lambdas still read it during the rolling deploy causes errors; needs an expand/contract sequence",
+      "keywords": ["rename|renam", "price_text", "deploy|running|old code|old lambdas|expand|contract|downtime|break|overlap"],
+      "location": "20260910_structured_address.sql"
+    },
+    {
+      "id": "missing-composite-index-hot-query",
+      "severity": "high",
+      "category": "performance",
+      "description": "The neighbourhood page query filters on neighborhood_id and status and sorts by published_at, but only a single-column index exists; a composite index is needed",
+      "keywords": ["index", "neighborhood_id|neighborhood|neighbourhood", "status|published_at|composite|sort"],
+      "location": "listings"
+    },
+    {
+      "id": "no-rollback-path",
+      "severity": "high",
+      "category": "operations",
+      "description": "There is no down migration and the only recovery is a nightly backup taken seven hours earlier, so a bad run loses a business day of broker edits",
+      "keywords": ["rollback|down migration|revers|irreversible|restore|backup", "migration|recovery|data loss"],
+      "location": "Rollout"
+    },
+    {
+      "id": "enum-add-value-in-transaction",
+      "severity": "medium",
+      "category": "correctness",
+      "description": "ALTER TYPE ... ADD VALUE runs inside the migration transaction and the new archived value is used in the same transaction, which Postgres rejects",
+      "keywords": ["alter type|add value|enum", "transaction|same migration|committed|commit"],
+      "location": "20260910_structured_address.sql"
+    },
+    {
+      "id": "table-rewrite-lock-on-large-table",
+      "severity": "medium",
+      "category": "performance",
+      "description": "The ALTER COLUMN TYPE and generated stored column rewrite the 2.1M-row table under an ACCESS EXCLUSIVE lock during business hours, blocking the site",
+      "keywords": ["lock|rewrite|access exclusive|blocking|block", "alter column|alter table|generated|stored|type", "2.1m|million|large table|business hours|10:00"],
+      "location": "20260910_structured_address.sql"
+    }
+  ]
+}

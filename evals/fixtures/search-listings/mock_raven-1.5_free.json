@@ -1,0 +1,28 @@
+{
+  "model": "mock/raven-1.5:free",
+  "family": "raven",
+  "findings": [
+    {
+      "id": "f_9631f9b98caf",
+      "claim": "Direct interpolation of q into to_tsquery inside a dynamically executed where clause allows SQL injection.",
+      "severity": "critical",
+      "category": "security",
+      "location": "app/api/search/route.ts",
+      "evidence": "to_tsquery('english', '${terms}')",
+      "recommendation": "Bind parameters.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_204cc1b77603",
+      "claim": "Fetching amenities per listing inside the loop is N+1.",
+      "severity": "high",
+      "category": "performance",
+      "location": "app/api/search/route.ts",
+      "evidence": "for (const l of listings)",
+      "recommendation": "Batch with IN (...).",
+      "confidence": "high"
+    }
+  ],
+  "cost": 0,
+  "timeMs": 43300
+}

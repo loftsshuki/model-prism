@@ -1,0 +1,28 @@
+{
+  "model": "mock/raven-1.5:free",
+  "family": "raven",
+  "findings": [
+    {
+      "id": "f_8987f818e287",
+      "claim": "A 'use client' component cannot hold the Resend API key; RESEND_API_KEY would be exposed in the browser bundle.",
+      "severity": "critical",
+      "category": "security",
+      "location": "app/account/Preferences.tsx",
+      "evidence": "new Resend(process.env.RESEND_API_KEY)",
+      "recommendation": "Move to server.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_efe7ff77fc6a",
+      "claim": "Logging the recipient's email address to console and Sentry is a PII leak.",
+      "severity": "high",
+      "category": "security",
+      "location": "app/api/cron/saved-search-alerts/route.ts",
+      "evidence": "Sentry.addBreadcrumb({ category: \"alerts\", message: `sent to ${user.email}`",
+      "recommendation": "Redact.",
+      "confidence": "high"
+    }
+  ],
+  "cost": 0,
+  "timeMs": 42600
+}

@@ -1,0 +1,38 @@
+{
+  "model": "mock/hawk-9b",
+  "family": "hawk",
+  "findings": [
+    {
+      "id": "f_ed0f084d3477",
+      "claim": "The unsubscribe endpoint accepts a sequential serial id with no signed token, so anyone can unsubscribe every user by enumerating ids.",
+      "severity": "critical",
+      "category": "security",
+      "location": "app/api/unsubscribe/route.ts",
+      "evidence": "`GET /api/unsubscribe?id=<saved_search_id>`",
+      "recommendation": "Use an HMAC-signed token per saved search.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_8cf044ca4db2",
+      "claim": "last_run_at and sent_at are only advanced after the whole batch, so a crash or timeout mid-loop re-sends every earlier email on the next run — duplicate alerts are guaranteed under any partial failure.",
+      "severity": "high",
+      "category": "correctness",
+      "location": "app/api/cron/saved-search-alerts/route.ts",
+      "evidence": "Mark everything as processed once the batch is through.",
+      "recommendation": "Update last_run_at per search immediately after its email is sent.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_800a388eef46",
+      "claim": "Preferences.tsx is a client component that instantiates Resend with RESEND_API_KEY; the secret is either bundled for the browser or undefined on the client.",
+      "severity": "critical",
+      "category": "security",
+      "location": "app/account/Preferences.tsx",
+      "evidence": "const resend = new Resend(process.env.RESEND_API_KEY);",
+      "recommendation": "Send test alerts from a server action.",
+      "confidence": "high"
+    }
+  ],
+  "cost": 0.004,
+  "timeMs": 17600
+}

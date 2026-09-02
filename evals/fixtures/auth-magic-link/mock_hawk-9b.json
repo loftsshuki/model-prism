@@ -1,0 +1,48 @@
+{
+  "model": "mock/hawk-9b",
+  "family": "hawk",
+  "findings": [
+    {
+      "id": "f_a916fef6a08b",
+      "claim": "The DELETE handler in app/api/listings/[id]/route.ts is left without any session or role check, so any unauthenticated caller can delete listings.",
+      "severity": "critical",
+      "category": "security",
+      "location": "app/api/listings/[id]/route.ts",
+      "evidence": "`DELETE /api/listings/[id]` — unchanged; it already validates the id is a UUID and returns 404 when the listing does not exist, which is enough.",
+      "recommendation": "Call getSession() and require role = 'admin' before deleting.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_460a4c5b3119",
+      "claim": "NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY ships the Supabase service-role key to the browser bundle because NEXT_PUBLIC_ variables are inlined into client code.",
+      "severity": "critical",
+      "category": "security",
+      "location": ".env.local",
+      "evidence": "NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY=...   # needed by the admin pages, which run client-side",
+      "recommendation": "Keep the service-role key server-only and route bulk edits through an admin API.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_4bce370fb037",
+      "claim": "The callback route performs an open redirect: it redirects to the unvalidated `next` query parameter, which a phishing link can point at an attacker domain.",
+      "severity": "high",
+      "category": "security",
+      "location": "app/api/auth/callback/route.ts",
+      "evidence": "redirect(searchParams.get(\"next\") ?? \"/\")",
+      "recommendation": "Only allow relative same-origin paths for next.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_8f6ee7002726",
+      "claim": "POST /api/auth/request-link has no rate limit, so an attacker can flood arbitrary inboxes with login emails.",
+      "severity": "medium",
+      "category": "security",
+      "location": "app/api/auth/request-link/route.ts",
+      "evidence": "Always return `202` regardless of whether the email exists",
+      "recommendation": "Rate limit by IP and by email address.",
+      "confidence": "medium"
+    }
+  ],
+  "cost": 0.0041,
+  "timeMs": 18400
+}

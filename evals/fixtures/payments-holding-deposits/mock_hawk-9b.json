@@ -1,0 +1,48 @@
+{
+  "model": "mock/hawk-9b",
+  "family": "hawk",
+  "findings": [
+    {
+      "id": "f_05649634b384",
+      "claim": "The Stripe webhook parses req.json() directly and never verifies the Stripe-Signature header with constructEvent, so anyone can forge a checkout.session.completed event.",
+      "severity": "critical",
+      "category": "security",
+      "location": "app/api/stripe/webhook/route.ts",
+      "evidence": "const event = (await req.json()) as Stripe.Event;   // Stripe posts JSON; parse directly",
+      "recommendation": "Use stripe.webhooks.constructEvent(rawBody, sig, STRIPE_WEBHOOK_SECRET).",
+      "confidence": "high"
+    },
+    {
+      "id": "f_839c8fba8f70",
+      "claim": "Two concurrent POST /api/holds requests both pass the 'one active hold' select before either inserts, so the same unit gets two holds; there is no unique constraint or transaction serializing the check.",
+      "severity": "critical",
+      "category": "correctness",
+      "location": "app/api/holds/route.ts",
+      "evidence": "The \"one active hold\" check happens before the insert, so two tenants cannot both hold the same unit.",
+      "recommendation": "Add a partial unique index on holds(unit_id) where status in ('pending','active') and handle the conflict.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_63ee252f13d9",
+      "claim": "Storing amount as float8 dollars loses precision; deposit and payment amounts should be integer cents like Stripe's unit_amount.",
+      "severity": "high",
+      "category": "data",
+      "location": "holds.amount",
+      "evidence": "amount float8 not null,                 -- dollars, e.g. 500.00",
+      "recommendation": "Use bigint cents.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_9b7452f9536a",
+      "claim": "Stripe redelivers webhooks on any non-2xx or timeout, and the handler inserts a payments row and re-captures on every delivery — there is no idempotency check on stripe_event_id.",
+      "severity": "high",
+      "category": "correctness",
+      "location": "app/api/stripe/webhook/route.ts",
+      "evidence": "await sql`insert into payments (hold_id, stripe_event_id, amount, kind)",
+      "recommendation": "Make stripe_event_id unique and skip already-processed events.",
+      "confidence": "high"
+    }
+  ],
+  "cost": 0.0047,
+  "timeMs": 20300
+}

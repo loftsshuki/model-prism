@@ -1,0 +1,48 @@
+{
+  "model": "mock/hawk-9b",
+  "family": "hawk",
+  "findings": [
+    {
+      "id": "f_9341e7be66eb",
+      "claim": "The migration drops address_raw in the same file that adds the structured columns and before any backfill, so the free-text source the parser needs is destroyed for all 2.1M rows.",
+      "severity": "critical",
+      "category": "data",
+      "location": "20260910_structured_address.sql",
+      "evidence": "alter table listings drop column address_raw;",
+      "recommendation": "Keep address_raw until every published row has been parsed; drop in a later migration.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_b3648e54fa63",
+      "claim": "Renaming price_text while old lambdas still read it during the rolling deploy will break the running app; use an expand/contract sequence instead.",
+      "severity": "high",
+      "category": "operations",
+      "location": "20260910_structured_address.sql",
+      "evidence": "alter table listings rename column price_text to price_text_legacy;",
+      "recommendation": "Add the new column, dual-write, deploy, then drop.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_a6b8619928da",
+      "claim": "The neighbourhood page query filters on neighborhood_id and status and sorts by published_at, but only a single-column index exists; a composite index (neighborhood_id, status, published_at desc) is needed.",
+      "severity": "high",
+      "category": "performance",
+      "location": "listings",
+      "evidence": "Currently backed by a single-column index on `neighborhood_id`.",
+      "recommendation": "create index concurrently on listings (neighborhood_id, status, published_at desc).",
+      "confidence": "high"
+    },
+    {
+      "id": "f_2e1e879388d4",
+      "claim": "ALTER TYPE listing_status ADD VALUE runs inside the migration transaction and the new 'archived' value is used by the update in the same transaction, which Postgres rejects with 'unsafe use of new value'.",
+      "severity": "medium",
+      "category": "correctness",
+      "location": "20260910_structured_address.sql",
+      "evidence": "alter type listing_status add value 'archived';",
+      "recommendation": "Move the enum change to its own migration that is committed first.",
+      "confidence": "high"
+    }
+  ],
+  "cost": 0.0039,
+  "timeMs": 17800
+}

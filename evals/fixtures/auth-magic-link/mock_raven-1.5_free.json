@@ -1,0 +1,38 @@
+{
+  "model": "mock/raven-1.5:free",
+  "family": "raven",
+  "findings": [
+    {
+      "id": "f_92c192f90ad9",
+      "claim": "A service_role key must never be prefixed NEXT_PUBLIC_; the browser bundle would contain it.",
+      "severity": "critical",
+      "category": "security",
+      "location": ".env.local",
+      "evidence": "NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY",
+      "recommendation": "Use SUPABASE_SERVICE_ROLE_KEY server-side only.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_e30619845c62",
+      "claim": "The callback redirect uses the raw next parameter without an allowlist, creating an open redirect.",
+      "severity": "high",
+      "category": "security",
+      "location": "app/api/auth/callback/route.ts",
+      "evidence": "redirect(searchParams.get(\"next\") ?? \"/\")",
+      "recommendation": "Validate next starts with '/' and not '//'.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_8b5fffb9505b",
+      "claim": "The plan should offer Google OAuth as well as magic links since brokers use Google Workspace.",
+      "severity": "low",
+      "category": "product",
+      "location": "Out of scope",
+      "evidence": "OAuth providers, MFA, session revocation UI.",
+      "recommendation": "Add Google OAuth in a follow-up.",
+      "confidence": "low"
+    }
+  ],
+  "cost": 0,
+  "timeMs": 41900
+}

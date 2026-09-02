@@ -11,6 +11,9 @@
  */
 import { aggregateModelValue, ModelValueRow } from "../src/lib/telemetry";
 import { loadTelemetry, TELEMETRY_PATH } from "../src/lib/telemetry-ledger";
+import { loadFeedbackLedger } from "../src/lib/feedback-ledger";
+import { summarizeFeedback } from "../src/lib/feedback";
+import { aggregateRedundancy } from "../src/lib/similarity";
 
 function arg(flag: string): string | null {
   const i = process.argv.indexOf(flag);
@@ -38,7 +41,8 @@ function main(): void {
     return;
   }
 
-  const rows = aggregateModelValue(runs).filter((r) => r.appearances >= minRuns);
+  // Human votes (npm run feedback) weight the ranking once there are enough of them.
+  const rows = aggregateModelValue(runs, summarizeFeedback(loadFeedbackLedger())).filter((r) => r.appearances >= minRuns);
   const span = `${runs.length} review${runs.length === 1 ? "" : "s"}`;
   const lowConfidence = runs.length < 5;
 
@@ -70,6 +74,14 @@ function main(): void {
   if (bargains.length) {
     out.push(`### 🌟 Keep / promote`);
     for (const r of bargains) out.push(`- **${r.name}** \`${r.id}\` — gold/run ${r.uniquePerRun.toFixed(2)}, ${fmtCost(r.totalCost)} total`);
+    out.push("");
+  }
+  // Redundancy: pairs whose responses are near-duplicates run after run are one
+  // vote, not two — drop one and spend the slot on a distinct family.
+  const redundant = aggregateRedundancy(runs.filter((r) => r.similarity).map((r) => ({ pairs: r.similarity!.pairs })));
+  if (redundant.length) {
+    out.push(`### 👯 Redundant pairs (near-identical responses over ≥3 runs)`);
+    for (const p of redundant) out.push(`- \`${p.a}\` ~ \`${p.b}\` — mean similarity ${p.meanScore.toFixed(2)} over ${p.runs} runs → keep one`);
     out.push("");
   }
   out.push("---");

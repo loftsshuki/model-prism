@@ -1,0 +1,28 @@
+{
+  "model": "mock/raven-1.5:free",
+  "family": "raven",
+  "findings": [
+    {
+      "id": "f_3b415a8515b9",
+      "claim": "Webhook signature is never checked; constructEvent must be used on the raw body.",
+      "severity": "critical",
+      "category": "security",
+      "location": "app/api/stripe/webhook/route.ts",
+      "evidence": "const event = (await req.json()) as Stripe.Event;",
+      "recommendation": "Verify with the webhook secret.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_109a936cecbf",
+      "claim": "Money stored as float8 will round incorrectly; store deposit amounts in integer cents.",
+      "severity": "high",
+      "category": "data",
+      "location": "holds.amount",
+      "evidence": "amount float8 not null",
+      "recommendation": "Use bigint cents.",
+      "confidence": "high"
+    }
+  ],
+  "cost": 0,
+  "timeMs": 39500
+}

@@ -1,0 +1,48 @@
+{
+  "model": "mock/owl-70b",
+  "family": "owl",
+  "findings": [
+    {
+      "id": "f_013258337618",
+      "claim": "Building the where clause by string concatenation from query params and running it through execute format is SQL injection; bind the values instead.",
+      "severity": "critical",
+      "category": "security",
+      "location": "app/api/search/route.ts",
+      "evidence": "execute format('select * from listings where %s",
+      "recommendation": "Parameterize.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_b2e757451e65",
+      "claim": "Full-text search on search_vector needs a GIN index; the (status) btree only narrows to 40k rows and every one is still scanned.",
+      "severity": "high",
+      "category": "performance",
+      "location": "listings.search_vector",
+      "evidence": "the existing `(status)` index narrows the scan",
+      "recommendation": "Add a GIN index.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_d3fc25faf1c7",
+      "claim": "The search route uses the service role client, bypassing RLS; with the injectable where clause any draft or unpublished listing is exposed.",
+      "severity": "critical",
+      "category": "security",
+      "location": "app/api/search/route.ts",
+      "evidence": "const db = createAdminClient();   // service role: avoids RLS overhead on the hot path",
+      "recommendation": "Use the anon server client.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_013c4dc277e7",
+      "claim": "A 250 ms debounce is too short for a query this expensive; requests will pile up during typing.",
+      "severity": "low",
+      "category": "performance",
+      "location": "app/listings/SearchBox.tsx",
+      "evidence": "debounced 250 ms",
+      "recommendation": "Debounce 400 ms and cancel in-flight requests.",
+      "confidence": "low"
+    }
+  ],
+  "cost": 0.0125,
+  "timeMs": 28700
+}

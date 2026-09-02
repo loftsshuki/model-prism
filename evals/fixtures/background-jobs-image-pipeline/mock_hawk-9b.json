@@ -1,0 +1,48 @@
+{
+  "model": "mock/hawk-9b",
+  "family": "hawk",
+  "findings": [
+    {
+      "id": "f_5fd0fc4ae3bf",
+      "claim": "The worker selects queued jobs and marks them running in separate statements, so two overlapping cron invocations claim and process the same job twice; use FOR UPDATE SKIP LOCKED or an atomic UPDATE ... RETURNING.",
+      "severity": "critical",
+      "category": "correctness",
+      "location": "app/api/cron/process-images/route.ts",
+      "evidence": "const jobs = await sql`select * from image_jobs where status = 'queued' and run_at <= now() order by run_at limit 50`;",
+      "recommendation": "Claim atomically.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_e9751025c639",
+      "claim": "The cron route has no CRON_SECRET or authorization check, so anyone who guesses the URL can trigger unbounded processing runs.",
+      "severity": "critical",
+      "category": "security",
+      "location": "app/api/cron/process-images/route.ts",
+      "evidence": "the route does not need an auth check",
+      "recommendation": "Require Authorization: Bearer $CRON_SECRET.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_4235422823b3",
+      "claim": "The plan assumes a 15-minute execution limit, but the default Vercel serverless function maxDuration is far lower, so a 50-image batch will be cut off mid-batch and leave jobs stuck in 'running'.",
+      "severity": "high",
+      "category": "operations",
+      "location": "app/api/cron/process-images/route.ts",
+      "evidence": "well within the 15-minute limit Vercel gives cron functions",
+      "recommendation": "Set maxDuration explicitly and shrink the batch.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_9d3a8a980c84",
+      "claim": "Deleting the original immediately and letting the tmp copy expire after one hour means any job that fails or waits longer than an hour loses the photo permanently.",
+      "severity": "high",
+      "category": "data",
+      "location": "Storage hygiene",
+      "evidence": "deletes the source key immediately",
+      "recommendation": "Keep originals until derivatives are verified.",
+      "confidence": "high"
+    }
+  ],
+  "cost": 0.0043,
+  "timeMs": 19100
+}

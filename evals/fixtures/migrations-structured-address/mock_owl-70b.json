@@ -1,0 +1,48 @@
+{
+  "model": "mock/owl-70b",
+  "family": "owl",
+  "findings": [
+    {
+      "id": "f_b085865c53d8",
+      "claim": "Dropping address_raw before the addresses have been parsed into the new columns means the structured fields will be empty and the raw data is gone.",
+      "severity": "critical",
+      "category": "data",
+      "location": "20260910_structured_address.sql",
+      "evidence": "drop column address_raw",
+      "recommendation": "Backfill first, drop later.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_4ad978a0c968",
+      "claim": "There is no down migration and the only recovery is a nightly backup from 03:00, so a bad run at 10:00 loses seven hours of broker edits with no rollback path.",
+      "severity": "high",
+      "category": "operations",
+      "location": "Rollout",
+      "evidence": "There is no down migration",
+      "recommendation": "Write a reversible migration and take a manual snapshot right before running it.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_79fe31610720",
+      "claim": "Adding an enum value and using it in the same transaction fails on Postgres; ADD VALUE must be committed before 'archived' can appear in an update.",
+      "severity": "medium",
+      "category": "correctness",
+      "location": "20260910_structured_address.sql",
+      "evidence": "update listings set status = 'archived'",
+      "recommendation": "Split into two migrations.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_b95983265870",
+      "claim": "Using point instead of PostGIS geography will make the planned 'nearby' module inaccurate at city scale.",
+      "severity": "low",
+      "category": "product",
+      "location": "Open questions",
+      "evidence": "Decided: `point` for now",
+      "recommendation": "Use geography(Point, 4326).",
+      "confidence": "low"
+    }
+  ],
+  "cost": 0.0118,
+  "timeMs": 26400
+}

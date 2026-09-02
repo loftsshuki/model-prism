@@ -1,0 +1,38 @@
+{
+  "model": "mock/finch-mini",
+  "family": "finch",
+  "findings": [
+    {
+      "id": "f_85731d87834b",
+      "claim": "Leaving DELETE on listings unchanged means the destructive route has no auth at all while POST and PATCH do.",
+      "severity": "critical",
+      "category": "security",
+      "location": "app/api/listings/[id]/route.ts",
+      "evidence": "`DELETE /api/listings/[id]` — unchanged",
+      "recommendation": "Gate DELETE with getSession() and role admin.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_54192926a532",
+      "claim": "Magic-link tokens never expire and are kept after use, so a token in an email archive logs the user in indefinitely.",
+      "severity": "high",
+      "category": "security",
+      "location": "login_tokens",
+      "evidence": "a nightly job can prune rows older than 90 days",
+      "recommendation": "Add expires_at and delete or flag the row on first use.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_f4c11ed5d2a8",
+      "claim": "Because the middleware matcher is limited to /admin, the write API routes are not covered and the 'no checks needed' assumption does not hold.",
+      "severity": "high",
+      "category": "security",
+      "location": "middleware.ts",
+      "evidence": "the API routes do not need their own checks",
+      "recommendation": "Add per-route authorization.",
+      "confidence": "high"
+    }
+  ],
+  "cost": 0.0019,
+  "timeMs": 12600
+}

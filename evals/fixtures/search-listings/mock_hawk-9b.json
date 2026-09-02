@@ -1,0 +1,48 @@
+{
+  "model": "mock/hawk-9b",
+  "family": "hawk",
+  "findings": [
+    {
+      "id": "f_96d30db0f379",
+      "claim": "User input is interpolated into where_clause and executed via EXECUTE format(), which is textbook SQL injection; the filters must be bound parameters.",
+      "severity": "critical",
+      "category": "security",
+      "location": "app/api/search/route.ts",
+      "evidence": "where_clause: `status = 'published' and search_vector @@ to_tsquery('english', '${terms}')`",
+      "recommendation": "Use parameterized queries and plainto_tsquery.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_445a385fb4b3",
+      "claim": "search_vector has no GIN index, so every search sequentially scans and ranks the published rows.",
+      "severity": "high",
+      "category": "performance",
+      "location": "listings.search_vector",
+      "evidence": "No further indexes are needed",
+      "recommendation": "create index concurrently on listings using gin (search_vector).",
+      "confidence": "high"
+    },
+    {
+      "id": "f_7ce584e769b8",
+      "claim": "Amenities are fetched with one query per listing in a loop — an N+1 that alone breaks the 300 ms budget.",
+      "severity": "high",
+      "category": "performance",
+      "location": "app/api/search/route.ts",
+      "evidence": "for (const l of listings) { l.amenities = (await db.from(\"listing_amenities\")",
+      "recommendation": "Fetch amenities for all ids in one query.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_16a71927f0a4",
+      "claim": "search_listings returns every matching row with no LIMIT and the API ships the full result set to the client for client-side paging.",
+      "severity": "medium",
+      "category": "performance",
+      "location": "search_listings",
+      "evidence": "The function returns every matching row ranked by `ts_rank`",
+      "recommendation": "Paginate server-side with limit/offset or keyset.",
+      "confidence": "high"
+    }
+  ],
+  "cost": 0.0044,
+  "timeMs": 18900
+}

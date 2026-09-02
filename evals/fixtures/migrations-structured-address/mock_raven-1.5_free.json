@@ -1,0 +1,28 @@
+{
+  "model": "mock/raven-1.5:free",
+  "family": "raven",
+  "findings": [
+    {
+      "id": "f_03ac8b462497",
+      "claim": "address_raw is dropped with no backfill of street, city and postal_code; parsing 'when a broker next saves' cannot run once the column is gone.",
+      "severity": "critical",
+      "category": "data",
+      "location": "20260910_structured_address.sql",
+      "evidence": "alter table listings drop column address_raw;",
+      "recommendation": "Do not drop yet.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_e15e74decc12",
+      "claim": "Renaming price_text in one step causes 'column does not exist' errors in old lambdas during the deploy overlap.",
+      "severity": "high",
+      "category": "operations",
+      "location": "20260910_structured_address.sql",
+      "evidence": "rename column price_text to price_text_legacy",
+      "recommendation": "Expand/contract.",
+      "confidence": "high"
+    }
+  ],
+  "cost": 0,
+  "timeMs": 44100
+}

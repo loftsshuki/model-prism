@@ -84,6 +84,12 @@ export interface ModelResponse {
   errorCode?: string;
   /** OpenRouter finish_reason: "stop" | "length" | "tool_calls" | ... — "length" means the review was cut by max_tokens. */
   finishReason?: string | null;
+  /** Structured findings when the council ran with `report_findings` (see src/lib/findings.ts). */
+  findings?: import("./findings").Finding[];
+  /** True when this response was served from the content-addressed response cache. */
+  fromCache?: boolean;
+  /** The review lens this member was assigned, if lenses were on. */
+  lens?: string;
 }
 
 export interface RunState {

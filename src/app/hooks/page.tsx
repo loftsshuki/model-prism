@@ -4,6 +4,7 @@ import Link from "next/link";
 
 import { useEffect, useMemo, useState } from "react";
 import { authHeaders } from "@/lib/client-api";
+import type { ReviewJob } from "@/lib/job-types";
 import type { ModelValueRow, RosterRecommendation } from "@/lib/telemetry";
 
 interface TelemetryResponse {
@@ -26,9 +27,12 @@ interface HookJob {
   updated_at: string;
 }
 
+const ACTIVE_SERVER_STATUSES = new Set(["queued", "running", "synthesizing"]);
+
 export default function HooksDashboardPage() {
   const [data, setData] = useState<TelemetryResponse | null>(null);
   const [jobs, setJobs] = useState<HookJob[]>([]);
+  const [serverJobs, setServerJobs] = useState<ReviewJob[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [error, setError] = useState<string | null>(null);
@@ -39,13 +43,16 @@ export default function HooksDashboardPage() {
     // `loading` starts true; polls refresh silently instead of flashing the spinner.
     const load = async () => {
       try {
-        const [telemetry, hookJobs] = await Promise.all([
+        const [telemetry, hookJobs, reviewJobs] = await Promise.all([
           fetch("/api/telemetry", { headers: authHeaders() }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
           fetch("/api/hook-jobs", { headers: authHeaders() }).then((r) => r.json()).catch(() => ({ jobs: [] })),
+          // Server-side runs (durable jobs advanced by /api/jobs/work); optional like hook jobs.
+          fetch("/api/jobs", { headers: authHeaders() }).then((r) => r.json()).catch(() => ({ jobs: [] })),
         ]);
         if (cancelled) return;
         setData(telemetry);
         setJobs(hookJobs.jobs || []);
+        setServerJobs(reviewJobs.jobs || []);
         setError(null);
       } catch (err) {
         if (cancelled) return;
@@ -58,6 +65,15 @@ export default function HooksDashboardPage() {
     const interval = window.setInterval(load, 15000);
     return () => { cancelled = true; window.clearInterval(interval); };
   }, [refreshTick]);
+
+  const cancelServerJob = async (id: string) => {
+    try {
+      await fetch(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST", headers: authHeaders() });
+    } catch {
+      // The next poll shows the real state either way.
+    }
+    setRefreshTick((t) => t + 1);
+  };
 
   const stats = useMemo(() => {
     const models = data?.leaderboard || [];
@@ -114,6 +130,16 @@ export default function HooksDashboardPage() {
               <StatusColumn title="Running" jobs={jobs.filter((job) => job.status === "running")} empty="No reviews running." />
               <StatusColumn title="Completed" jobs={jobs.filter((job) => job.status === "completed")} empty="No completed hook jobs yet." />
               <StatusColumn title="Failed" jobs={jobs.filter((job) => job.status === "failed")} empty="No failed hook jobs." />
+            </section>
+
+            <section className="rounded-xl border border-neutral-800 bg-neutral-900 p-5">
+              <div className="flex items-baseline justify-between gap-4">
+                <h2 className="text-lg font-semibold">Server-side runs</h2>
+                <p className="text-xs text-neutral-500">
+                  Enqueued via <code>POST /api/jobs</code>, advanced one step at a time by <code>/api/jobs/work</code>.
+                </p>
+              </div>
+              <ServerRunsTable jobs={serverJobs} onCancel={cancelServerJob} />
             </section>
 
             <section className="rounded-xl border border-neutral-800 bg-neutral-900 p-5 space-y-3">
@@ -181,4 +207,66 @@ function StatusColumn({ title, jobs, empty }: { title: string; jobs: HookJob[]; 
       )}
     </div>
   );
+}
+
+function ServerRunsTable({ jobs, onCancel }: { jobs: ReviewJob[]; onCancel: (id: string) => void }) {
+  if (jobs.length === 0) {
+    return <p className="mt-4 text-sm text-neutral-500">No server-side runs yet.</p>;
+  }
+  return (
+    <div className="mt-4 overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-[11px] uppercase tracking-wide text-neutral-500">
+            <th className="pb-2 pr-4 font-medium">Job</th>
+            <th className="pb-2 pr-4 font-medium">Status</th>
+            <th className="pb-2 pr-4 font-medium">Phase</th>
+            <th className="pb-2 pr-4 font-medium">Models</th>
+            <th className="pb-2 pr-4 font-medium">Cost</th>
+            <th className="pb-2 pr-4 font-medium">Created</th>
+            <th className="pb-2 font-medium"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {jobs.map((job) => {
+            const active = ACTIVE_SERVER_STATUSES.has(job.status);
+            const total = job.step.pending.length + job.step.done.length + job.step.failed.length;
+            return (
+              <tr key={job.id} className="border-t border-neutral-800 align-top">
+                <td className="py-2 pr-4">
+                  <span className="font-mono text-xs text-neutral-300" title={job.id}>{job.id.slice(0, 16)}…</span>
+                  {job.error && <p className="mt-1 max-w-xs text-xs text-red-300" title={job.error}>{job.error.slice(0, 120)}</p>}
+                </td>
+                <td className="py-2 pr-4"><StatusPill status={job.status} /></td>
+                <td className="py-2 pr-4 text-neutral-300">{job.step.phase}</td>
+                <td className="py-2 pr-4 text-neutral-300">
+                  {job.step.done.length}/{total} done
+                  {job.step.failed.length > 0 && <span className="text-red-300"> · {job.step.failed.length} failed</span>}
+                  {job.step.pending.length > 0 && <span className="text-neutral-500"> · {job.step.pending.length} pending</span>}
+                </td>
+                <td className="py-2 pr-4 text-neutral-300">${Number(job.cost || 0).toFixed(4)}</td>
+                <td className="py-2 pr-4 text-neutral-500">{new Date(job.created_at).toLocaleString()}</td>
+                <td className="py-2 text-right whitespace-nowrap">
+                  {job.status === "completed" && (
+                    <a href={`/runs/${job.run_id}`} className="text-xs text-violet-300 hover:text-violet-200">Open run →</a>
+                  )}
+                  {active && (
+                    <button onClick={() => onCancel(job.id)} className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-300 hover:border-red-500 hover:text-red-300">Cancel</button>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function StatusPill({ status }: { status: ReviewJob["status"] }) {
+  const tone = status === "completed" ? "border-emerald-900 text-emerald-300"
+    : status === "failed" ? "border-red-900 text-red-300"
+    : status === "cancelled" ? "border-neutral-700 text-neutral-400"
+    : "border-violet-900 text-violet-300";
+  return <span className={`rounded-full border px-2 py-0.5 text-[11px] uppercase tracking-wide ${tone}`}>{status}</span>;
 }

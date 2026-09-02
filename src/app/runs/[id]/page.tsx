@@ -344,7 +344,7 @@ export default function RunPage() {
         </div>
 
         {/* Synthesis */}
-        {run.synthesis && <SynthesisView synthesis={run.synthesis} />}
+        {run.synthesis && <SynthesisView synthesis={run.synthesis} runId={run.id} />}
 
         {/* Responses */}
         <div className="space-y-2">

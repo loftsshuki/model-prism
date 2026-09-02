@@ -1,0 +1,73 @@
+{
+  "plan": "payments-holding-deposits.md",
+  "flaws": [
+    {
+      "id": "webhook-signature-unverified",
+      "severity": "critical",
+      "category": "security",
+      "description": "The Stripe webhook handler parses the JSON body directly and never verifies the Stripe-Signature header, so anyone can forge a checkout.session.completed event and activate holds for free",
+      "keywords": [
+        "webhook",
+        "signature|constructevent|stripe-signature|verif|forge|spoof"
+      ],
+      "location": "app/api/stripe/webhook/route.ts"
+    },
+    {
+      "id": "double-hold-race",
+      "severity": "critical",
+      "category": "correctness",
+      "description": "Two concurrent POST /api/holds requests can both pass the check-then-insert and hold the same unit because there is no unique constraint or transaction serializing the check",
+      "keywords": [
+        "race|concurrent|simultaneous|double|two requests|two tenants|check-then-insert|toctou",
+        "hold|unit",
+        "unique|constraint|partial index|lock|transaction|serializ|atomic"
+      ],
+      "location": "app/api/holds/route.ts"
+    },
+    {
+      "id": "money-as-float",
+      "severity": "high",
+      "category": "data",
+      "description": "Deposit and payment amounts are stored as float8 dollars, which loses precision and drifts from Stripe's integer cents",
+      "keywords": [
+        "float8|float|floating|double precision|numeric(|decimal|integer cents",
+        "amount|deposit|price"
+      ],
+      "location": "holds.amount"
+    },
+    {
+      "id": "capture-before-commit-no-rollback",
+      "severity": "high",
+      "category": "operations",
+      "description": "The webhook captures the payment before the database writes, so if the insert or update fails the tenant is charged with no refund or compensating step",
+      "keywords": [
+        "capture|charged|charge",
+        "fail|rollback|refund|compensat|partial|inconsistent",
+        "insert|update|database|db write|hold"
+      ],
+      "location": "app/api/stripe/webhook/route.ts"
+    },
+    {
+      "id": "webhook-not-idempotent",
+      "severity": "high",
+      "category": "correctness",
+      "description": "Stripe retries webhooks, and the handler inserts a payments row and re-captures on every delivery with no idempotency check on stripe_event_id",
+      "keywords": [
+        "idempoten|duplicate|retry|retries|redeliver|replay|twice|again|more than once",
+        "webhook|event"
+      ],
+      "location": "app/api/stripe/webhook/route.ts"
+    },
+    {
+      "id": "stripe-payload-expansion-assumption",
+      "severity": "medium",
+      "category": "correctness",
+      "description": "The plan assumes the checkout.session.completed payload carries an expanded payment_intent with inline charges, but Stripe sends only the PaymentIntent id string and charges are not included",
+      "keywords": [
+        "expand|expanded|only the id|only an id|id string|string id|not expanded|not included|retrieve",
+        "payment_intent|charges|last4"
+      ],
+      "location": "app/api/stripe/webhook/route.ts"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "model": "mock/finch-mini",
+  "family": "finch",
+  "findings": [
+    {
+      "id": "f_7b34860db1a4",
+      "claim": "Overlapping invocations process the same job twice because select-then-update is not an atomic claim.",
+      "severity": "critical",
+      "category": "correctness",
+      "location": "app/api/cron/process-images/route.ts",
+      "evidence": "update image_jobs set status = 'running'",
+      "recommendation": "Atomic claim with SKIP LOCKED.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_f787493020bb",
+      "claim": "Vercel functions do not get 15 minutes by default; the duration limit will cut off the batch.",
+      "severity": "high",
+      "category": "operations",
+      "location": "app/api/cron/process-images/route.ts",
+      "evidence": "15-minute limit",
+      "recommendation": "Configure maxDuration.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_9b3c3488a8a0",
+      "claim": "Failed jobs are never retried, so a transient failure loses the upload until a broker re-uploads.",
+      "severity": "medium",
+      "category": "operations",
+      "location": "Failure handling",
+      "evidence": "most failures are corrupt files",
+      "recommendation": "Add retry with backoff.",
+      "confidence": "high"
+    }
+  ],
+  "cost": 0.002,
+  "timeMs": 13100
+}

@@ -5,9 +5,12 @@ import { useMemo, useState } from "react";
 import { SynthesisResult } from "@/lib/types";
 import { analyzeReviewQuality, buildActionChecklistMarkdown, extractActionItems } from "@/lib/review-analysis";
 import { ThemeHeatmap } from "./theme-heatmap";
+import { FeedbackButtons } from "./feedback-buttons";
 
 interface SynthesisViewProps {
   synthesis: SynthesisResult;
+  /** Run the synthesis belongs to; feedback votes are stored against it. */
+  runId?: string | null;
   title?: string;
   eyebrow?: string;
   onSecondPass?: () => void;
@@ -16,6 +19,7 @@ interface SynthesisViewProps {
 
 export function SynthesisView({
   synthesis,
+  runId = null,
   title = "Master Synthesis",
   eyebrow = "All models distilled",
   onSecondPass,
@@ -150,6 +154,7 @@ export function SynthesisView({
                     <span className="text-[10px] text-grey-30 ml-2 tracking-wide">
                       ({c.supportingModels.length} models, {c.strength})
                     </span>
+                    <FeedbackButtons claim={c.point} section="consensus" models={c.supportingModels} runId={runId} />
                   </li>
                 ))}
               </ul>
@@ -166,6 +171,7 @@ export function SynthesisView({
                     <span className="text-[10px] text-grey-30 ml-2 tracking-wide">
                       (only {u.model})
                     </span>
+                    <FeedbackButtons claim={u.insight} section="uniqueInsight" models={[u.model]} runId={runId} />
                   </li>
                 ))}
               </ul>
@@ -198,6 +204,32 @@ export function SynthesisView({
                 {synthesis.blindSpots.map((b, i) => (
                   <li key={i} className="text-sm text-grey-40 leading-relaxed pl-4 border-l-2 border-grey-10">
                     {b}
+                    <FeedbackButtons claim={b} section="blindSpot" runId={runId} />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {synthesis.lockedDecisions && synthesis.lockedDecisions.length > 0 && (
+            <div>
+              <span className="overline text-grey-60">🔒 Locked Decisions (constraints)</span>
+              <ol className="mt-3 space-y-1.5 pl-6 list-decimal text-sm text-grey-50">
+                {synthesis.lockedDecisions.map((d, i) => <li key={i}>{d}</li>)}
+              </ol>
+            </div>
+          )}
+
+          {synthesis.strategicBlindSpots && synthesis.strategicBlindSpots.length > 0 && (
+            <div>
+              <span className="overline text-gold">🎯 Strategic Blind Spots</span>
+              <ul className="mt-3 space-y-3">
+                {synthesis.strategicBlindSpots.map((sb, i) => (
+                  <li key={i} className="text-sm text-grey-60 leading-relaxed pl-4 border-l-2 border-gold/30">
+                    <span className="text-[10px] text-grey-30 tracking-wide mr-2">[{sb.severity}] ({sb.category})</span>
+                    {sb.gap}
+                    <FeedbackButtons claim={sb.gap} section="strategicBlindSpot" runId={runId} />
+                    <p className="text-xs text-grey-40 mt-1 italic">Why it matters: {sb.whyItMatters}</p>
                   </li>
                 ))}
               </ul>

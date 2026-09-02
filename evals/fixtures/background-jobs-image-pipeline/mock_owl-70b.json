@@ -1,0 +1,48 @@
+{
+  "model": "mock/owl-70b",
+  "family": "owl",
+  "findings": [
+    {
+      "id": "f_ded4f8b10588",
+      "claim": "Two cron entries on the same path will race for the same queued jobs because the claim is not atomic; each invocation's select can return the same rows.",
+      "severity": "critical",
+      "category": "correctness",
+      "location": "app/api/cron/process-images/route.ts",
+      "evidence": "each invocation takes its own 50 queued jobs",
+      "recommendation": "SKIP LOCKED.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_251bad544767",
+      "claim": "An unauthenticated cron endpoint is reachable by anyone; 'not guessable' is not an auth control.",
+      "severity": "critical",
+      "category": "security",
+      "location": "app/api/cron/process-images/route.ts",
+      "evidence": "the path is not guessable in practice",
+      "recommendation": "Verify CRON_SECRET.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_c8ab939bfe05",
+      "claim": "Transient failures like storage timeouts mark the job failed forever with no retry or backoff, even though attempts and run_at were added for exactly that.",
+      "severity": "medium",
+      "category": "operations",
+      "location": "Failure handling",
+      "evidence": "We do not retry automatically",
+      "recommendation": "Retry with exponential backoff up to 3 attempts, then dead-letter.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_680960a6b1ca",
+      "claim": "Loading a 25 MB JPEG into memory and producing three derivatives with sharp will exceed the memory available to the serverless function.",
+      "severity": "medium",
+      "category": "operations",
+      "location": "Worker",
+      "evidence": "sharp resizes a 20 MB JPEG in ~2s",
+      "recommendation": "Stream and process one derivative at a time.",
+      "confidence": "medium"
+    }
+  ],
+  "cost": 0.0127,
+  "timeMs": 29900
+}

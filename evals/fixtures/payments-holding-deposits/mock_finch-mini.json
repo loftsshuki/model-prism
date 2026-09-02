@@ -1,0 +1,48 @@
+{
+  "model": "mock/finch-mini",
+  "family": "finch",
+  "findings": [
+    {
+      "id": "f_19b59fac602d",
+      "claim": "Concurrent hold requests race between the select and the insert; without a unique constraint two tenants can hold the same unit.",
+      "severity": "critical",
+      "category": "correctness",
+      "location": "app/api/holds/route.ts",
+      "evidence": "The \"one active hold\" check happens before the insert",
+      "recommendation": "Partial unique index on unit_id for active holds.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_2b885e009777",
+      "claim": "The webhook is not idempotent: a retried event inserts a duplicate payments row and captures again.",
+      "severity": "high",
+      "category": "correctness",
+      "location": "app/api/stripe/webhook/route.ts",
+      "evidence": "await sql`insert into payments",
+      "recommendation": "Dedupe on stripe_event_id.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_8d566056de2f",
+      "claim": "checkout.session.completed does not include an expanded payment_intent by default, so reading pi.charges.data[0] for last4 will fail.",
+      "severity": "medium",
+      "category": "correctness",
+      "location": "app/api/stripe/webhook/route.ts",
+      "evidence": "last4: pi.charges.data[0].payment_method_details!.card!.last4",
+      "recommendation": "Fetch the PaymentIntent separately.",
+      "confidence": "high"
+    },
+    {
+      "id": "f_9d37cee0eefc",
+      "claim": "Stripe Checkout is the wrong product here; an embedded Payment Element would keep tenants on-site.",
+      "severity": "low",
+      "category": "product",
+      "location": "Flow",
+      "evidence": "mode: \"payment\"",
+      "recommendation": "Use Payment Element.",
+      "confidence": "low"
+    }
+  ],
+  "cost": 0.0021,
+  "timeMs": 14200
+}
