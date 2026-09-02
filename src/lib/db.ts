@@ -93,10 +93,30 @@ export async function initDb() {
     )
   `;
 
+  // Indexes for the per-run lookups (getRun, listRuns' join) and the history ordering.
+  await sql`CREATE INDEX IF NOT EXISTS responses_run_id_idx ON responses (run_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS syntheses_run_id_idx ON syntheses (run_id, created_at DESC)`;
+  await sql`CREATE INDEX IF NOT EXISTS runs_created_at_idx ON runs (created_at DESC)`;
+  await sql`CREATE INDEX IF NOT EXISTS run_telemetry_created_at_idx ON run_telemetry (created_at DESC)`;
+  // One row per (run, model): a retried model updates its row instead of duplicating it.
+  // Existing databases may already hold duplicates from the old INSERT-only path;
+  // keep the newest row per pair so the unique index can be created without failing.
+  await sql`
+    DELETE FROM responses a USING responses b
+    WHERE a.run_id = b.run_id AND a.model = b.model AND a.id < b.id
+  `;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS responses_run_model_uidx ON responses (run_id, model)`;
+
   initialized = true;
 }
 
 // --- Queries ---
+
+// A corrupt/legacy JSON column must not make a whole run unreadable.
+function safeJson<T>(raw: unknown, fallback: T): T {
+  if (typeof raw !== "string") return fallback;
+  try { return JSON.parse(raw) as T; } catch { return fallback; }
+}
 
 export async function createRun(
   id: string,
@@ -130,6 +150,22 @@ export async function saveResponse(
   await sql`
     INSERT INTO responses (run_id, model, model_name, base_architecture, response, error, time_ms, input_tokens, output_tokens, cost)
     VALUES (${runId}, ${model}, ${modelName}, ${family}, ${response}, ${error}, ${timeMs}, ${inputTokens}, ${outputTokens}, ${cost})
+    ON CONFLICT (run_id, model) DO UPDATE SET
+      model_name = EXCLUDED.model_name,
+      base_architecture = EXCLUDED.base_architecture,
+      response = EXCLUDED.response,
+      error = EXCLUDED.error,
+      time_ms = EXCLUDED.time_ms,
+      input_tokens = EXCLUDED.input_tokens,
+      output_tokens = EXCLUDED.output_tokens,
+      cost = EXCLUDED.cost,
+      created_at = NOW()
+  `;
+  // Derive the run total from its responses so it is always the SUM, never the
+  // last model's cost (the previous `SET total_cost = ${cost}` overwrote it).
+  await sql`
+    UPDATE runs SET total_cost = COALESCE((SELECT SUM(cost) FROM responses WHERE run_id = ${runId}), 0)
+    WHERE id = ${runId}
   `;
 }
 
@@ -146,12 +182,6 @@ export async function saveSynthesis(
   `;
 }
 
-export async function updateRunCost(runId: string, totalCost: number) {
-  await initDb();
-  const sql = getClient();
-  await sql`UPDATE runs SET total_cost = ${totalCost} WHERE id = ${runId}`;
-}
-
 export async function getRun(id: string) {
   await initDb();
   const sql = getClient();
@@ -159,20 +189,17 @@ export async function getRun(id: string) {
   const runs = await sql`SELECT * FROM runs WHERE id = ${id}`;
   if (runs.length === 0) return null;
 
-  const responses = await sql`
-    SELECT * FROM responses WHERE run_id = ${id} ORDER BY created_at
-  `;
-
-  const syntheses = await sql`
-    SELECT * FROM syntheses WHERE run_id = ${id} ORDER BY created_at DESC LIMIT 1
-  `;
+  const [responses, syntheses] = await Promise.all([
+    sql`SELECT * FROM responses WHERE run_id = ${id} ORDER BY created_at`,
+    sql`SELECT * FROM syntheses WHERE run_id = ${id} ORDER BY created_at DESC LIMIT 1`,
+  ]);
 
   const row = runs[0];
   return {
     ...row,
-    models: JSON.parse(row.models as string),
+    models: safeJson<string[]>(row.models, []),
     responses,
-    synthesis: syntheses[0] ? JSON.parse(syntheses[0].result as string) : null,
+    synthesis: syntheses[0] ? safeJson<unknown>(syntheses[0].result, null) : null,
     synthesisModel: syntheses[0]?.model_used ?? null,
   };
 }
@@ -259,12 +286,12 @@ export async function listRuns() {
   const sql = getClient();
 
   const runs = await sql`
-    SELECT r.id, r.content, r.prompt, r.total_cost, r.context_metadata, r.created_at,
+    SELECT r.id, LEFT(r.content, 400) AS content, LEFT(r.prompt, 400) AS prompt, r.total_cost, r.context_metadata, r.created_at,
       COUNT(resp.id)::int as response_count,
       (SELECT COUNT(*)::int FROM syntheses s WHERE s.run_id = r.id) as has_synthesis
     FROM runs r
     LEFT JOIN responses resp ON resp.run_id = r.id
-    GROUP BY r.id, r.content, r.prompt, r.total_cost, r.context_metadata, r.created_at
+    GROUP BY r.id, r.total_cost, r.context_metadata, r.created_at
     ORDER BY r.created_at DESC
     LIMIT 50
   `;

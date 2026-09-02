@@ -240,6 +240,22 @@ describe("judgeViaOpenRouter", () => {
     expect(r.unique_insights).toHaveLength(1);
   });
 
+  it("retries a missing required nested key (Zod 4 reports no `received` field) and succeeds", async () => {
+    // Regression: classifyZodError used to look for `received === "undefined"`, a field
+    // Zod 4 no longer emits, so every schema failure became a non-retryable type_mismatch.
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      if (calls === 1) {
+        return toolResponse(judgePayload({ blind_spots: [{ gap: "no rollback" }] as never })); // why_it_matters missing
+      }
+      return toolResponse(judgePayload());
+    }) as typeof fetch;
+    const result = await judgeViaOpenRouter({ openrouterKey: "k", draft: "d", responses: [], reviewPrompt: "r", baseDelayMs: 1 });
+    expect(calls).toBe(2);
+    expect(result.blind_spots[0].why_it_matters).toBe("prod risk");
+  });
+
   it("fast-fails (non-retryable) on a type_mismatch and throws JudgeError", async () => {
     let calls = 0;
     globalThis.fetch = (async () => {

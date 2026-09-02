@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { OpenRouterError, isNonRetryableBody, openrouterChat, parseToolCall, withRetry } from "./openrouter";
+import { clipForPrompt, PROMPT_DOC_CHAR_LIMIT } from "./prompt-budget";
 
 export const SynthesisSchema = z.object({
   masterDocument: z.string().describe(
@@ -137,15 +139,9 @@ export const OPENROUTER_SYNTHESIS_MODEL_ID = "anthropic/claude-opus-4.8";
 // (malformed request, bad key, exhausted credits), so the loop fails fast on it.
 type TaggedError = Error & { nonRetryable?: boolean };
 
-// A response body is non-retryable if it names a permanent condition, regardless of
-// the HTTP status that carried it (e.g. some "credit balance too low" come back 4xx).
-// Exported so the fusion judge/synthesizer (src/lib/fusion.ts) shares the SAME
-// permanent-failure classification as legacy synthesis — one source of truth.
-export function isNonRetryableBody(body: string): boolean {
-  const b = body.toLowerCase();
-  return b.includes("credit balance") || b.includes("insufficient credit") ||
-    b.includes("invalid_request") || b.includes("authentication");
-}
+// Permanent-failure classification is shared with every OpenRouter caller via
+// src/lib/openrouter.ts; re-exported here so existing imports keep working.
+export { isNonRetryableBody } from "./openrouter";
 
 // Call Anthropic directly from the browser — no Vercel timeout
 export async function synthesizeDirect(
@@ -212,7 +208,7 @@ export async function synthesizeDirect(
         throw new Error("No structured output returned from synthesis model");
       }
 
-      return toolBlock.input as SynthesisResult;
+      return coerceSynthesisResult(toolBlock.input);
     } catch (e) {
       lastError = e instanceof Error ? e : new Error(String(e));
       // Fast-fail on non-retryable billing/auth/bad-request errors. A thrown network
@@ -246,6 +242,7 @@ export async function synthesizeViaOpenRouter(opts: {
   context?: string;
   customSynthesisInstructions?: string | null;
   retryOptions?: { maxAttempts?: number; baseDelayMs?: number };
+  signal?: AbortSignal;
 }): Promise<SynthesisResult> {
   const modelId = opts.modelId ?? OPENROUTER_SYNTHESIS_MODEL_ID;
   // Opus 4.8 (and other reasoning models) reject FORCED tool_choice — Anthropic
@@ -256,87 +253,89 @@ export async function synthesizeViaOpenRouter(opts: {
   const prompt = buildSynthesisPrompt(
     opts.content, opts.analysisPrompt, opts.responses, opts.context, opts.customSynthesisInstructions
   ) + "\n\nIMPORTANT: Respond ONLY by calling the `synthesis` tool with the structured result. Do not reply with prose.";
-  const maxAttempts = opts.retryOptions?.maxAttempts ?? 4;
-  const baseDelayMs = opts.retryOptions?.baseDelayMs ?? 2000;
 
-  // One attempt: fetch + extract the forced tool call. Throws TaggedError; the
-  // caller's loop decides retry vs fast-fail. Kept small to bound complexity.
-  const attempt = async (): Promise<SynthesisResult> => {
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${opts.openrouterKey}`,
-        "content-type": "application/json",
-        "HTTP-Referer": "https://model-prism.vercel.app",
-        "X-Title": "Model Prism",
-      },
-      body: JSON.stringify({
-        model: modelId,
-        // 32K, raised from 16K (2026-06-12): a 10-model council synthesis emits an
-        // entire rewritten master plan as tool-call JSON — 16K truncated mid-string
-        // on real plans (finish_reason=length), which surfaced as "arguments were
-        // not valid JSON" on every retry. Fable 5 supports up to 128K output, but a
-        // non-streaming fetch must receive headers before undici's 300s timeout, so
-        // don't raise this further without switching to streaming.
-        max_tokens: 32000,
-        tools: [{
-          type: "function",
-          function: {
-            name: "synthesis",
-            description: "Output the structured synthesis result",
-            parameters: SynthesisJsonSchema,
-          },
-        }],
-        tool_choice: "auto",
-        messages: [{ role: "user", content: prompt }],
-      }),
+  return withRetry(async () => {
+    const result = await openrouterChat({
+      apiKey: opts.openrouterKey,
+      model: modelId,
+      // 32K: a 10-model council synthesis emits an entire rewritten master plan as
+      // tool-call JSON; 16K truncated mid-string on real plans. The call streams, so
+      // long generations no longer trip undici's 300s header timeout.
+      maxTokens: 32000,
+      tools: [{
+        type: "function",
+        function: { name: "synthesis", description: "Output the structured synthesis result", parameters: SynthesisJsonSchema },
+      }],
+      toolChoice: "auto",
+      timeoutMs: SYNTHESIS_TIMEOUT_MS,
+      signal: opts.signal,
+      title: "Model Prism (synthesis)",
+      messages: [{ role: "user", content: prompt }],
     });
+    const raw = parseToolCall<unknown>(result, "synthesis");
+    return coerceSynthesisResult(raw);
+  }, {
+    maxAttempts: opts.retryOptions?.maxAttempts ?? 4,
+    baseDelayMs: opts.retryOptions?.baseDelayMs ?? 2000,
+    onRetry: (err: OpenRouterError, attempt, delayMs) => {
+      const max = opts.retryOptions?.maxAttempts ?? 4;
+      console.error(`  Synthesis attempt ${attempt}/${max} failed (${err.message.slice(0, 120)}); retrying in ${delayMs}ms...`);
+    },
+  });
+}
 
-    if (!res.ok) {
-      const body = await res.text();
-      const e: TaggedError = new Error(`OpenRouter error: ${res.status} ${body.slice(0, 200)}`);
-      e.nonRetryable = res.status === 400 || res.status === 401 || res.status === 403 || isNonRetryableBody(body);
-      throw e;
-    }
+/** Wall-clock budget for one synthesis call (streamed; Opus at 32k output tokens can take ~10 min). */
+export const SYNTHESIS_TIMEOUT_MS = 15 * 60 * 1000;
 
-    const data = await res.json();
-    const choice = data.choices?.[0];
-    const finishReason = choice?.finish_reason ?? choice?.native_finish_reason;
-    const toolCall = choice?.message?.tool_calls?.[0];
-    const rawArgs = toolCall?.function?.arguments;
-    if (!rawArgs) {
-      // Model returned prose instead of the forced tool call — transient, retry.
-      throw new Error(`No structured output (tool_call) returned from synthesis model (finish_reason=${finishReason ?? "unknown"})`);
-    }
-    try {
-      return JSON.parse(rawArgs) as SynthesisResult;
-    } catch {
-      // finish_reason=length means the arguments were cut mid-string by max_tokens —
-      // a retry at the same cap fails identically, so the message must say so.
-      const detail = `finish_reason=${finishReason ?? "unknown"}, args_len=${rawArgs.length}, tail=${JSON.stringify(rawArgs.slice(-60))}`;
-      throw new Error(
-        finishReason === "length"
-          ? `Synthesis tool_call truncated by max_tokens (${detail})`
-          : `Synthesis tool_call arguments were not valid JSON (${detail})`
-      );
-    }
-  };
+// Tolerant validation of the model's structured output. The tool-call JSON has
+// historically been trusted verbatim (`as SynthesisResult`), so a missing
+// `strength` or a bad enum reached the renderer as "**[undefined]**" and the
+// telemetry ledger as garbage. Coerce rather than reject: an odd enum becomes a
+// sane default, a missing array becomes []. Only a structurally hopeless payload
+// (no masterDocument at all) throws, and that is retryable.
+const STRENGTHS = new Set(["strong", "moderate", "weak"]);
+const SIGNIFICANCE = new Set(["high", "medium", "low"]);
+const str = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : v == null ? fallback : String(v));
+const strArray = (v: unknown): string[] => (Array.isArray(v) ? v.map((x) => str(x)).filter(Boolean) : []);
+const objArray = (v: unknown): Array<Record<string, unknown>> =>
+  Array.isArray(v) ? v.filter((x): x is Record<string, unknown> => !!x && typeof x === "object") : [];
 
-  let lastError: Error | null = null;
-  for (let i = 1; i <= maxAttempts; i++) {
-    try {
-      return await attempt();
-    } catch (e) {
-      lastError = e instanceof Error ? e : new Error(String(e));
-      if ((lastError as TaggedError).nonRetryable) throw lastError;
-      if (i < maxAttempts) {
-        const backoffMs = baseDelayMs * 2 ** (i - 1) + Math.floor(Math.random() * 500);
-        console.error(`  Synthesis attempt ${i}/${maxAttempts} failed (${lastError.message.slice(0, 120)}); retrying in ${backoffMs}ms...`);
-        await new Promise((r) => setTimeout(r, backoffMs));
-      }
-    }
+export function coerceSynthesisResult(raw: unknown): SynthesisResult {
+  if (!raw || typeof raw !== "object") {
+    throw new OpenRouterError("malformed_json", "Synthesis output was not an object", { retryable: true });
   }
-  throw lastError ?? new Error("Synthesis failed: unknown error");
+  const r = raw as Record<string, unknown>;
+  const masterDocument = str(r.masterDocument);
+  if (!masterDocument.trim()) {
+    throw new OpenRouterError("malformed_json", "Synthesis output had no masterDocument", { retryable: true });
+  }
+  return {
+    masterDocument,
+    consensus: objArray(r.consensus).map((c) => ({
+      point: str(c.point),
+      supportingModels: strArray(c.supportingModels),
+      strength: (STRENGTHS.has(str(c.strength)) ? str(c.strength) : "moderate") as "strong" | "moderate" | "weak",
+    })).filter((c) => c.point),
+    uniqueInsights: objArray(r.uniqueInsights).map((u) => ({
+      model: str(u.model, "unknown"),
+      insight: str(u.insight),
+      significance: (SIGNIFICANCE.has(str(u.significance)) ? str(u.significance) : "medium") as "high" | "medium" | "low",
+    })).filter((u) => u.insight),
+    disagreements: objArray(r.disagreements).map((d) => ({
+      topic: str(d.topic),
+      positions: objArray(d.positions).map((p) => ({ models: strArray(p.models), position: str(p.position) })).filter((p) => p.position),
+    })).filter((d) => d.topic),
+    blindSpots: strArray(r.blindSpots),
+    themeMatrix: objArray(r.themeMatrix).map((t) => {
+      const scores: Record<string, number> = {};
+      const rawScores = (t.scores && typeof t.scores === "object" ? t.scores : {}) as Record<string, unknown>;
+      for (const [k, v] of Object.entries(rawScores)) {
+        const n = typeof v === "number" ? v : Number(v);
+        if (Number.isFinite(n)) scores[k] = Math.max(0, Math.min(3, n));
+      }
+      return { theme: str(t.theme), scores };
+    }).filter((t) => t.theme),
+  };
 }
 
 export function buildSynthesisPrompt(
@@ -346,7 +345,9 @@ export function buildSynthesisPrompt(
   context?: string,
   customSynthesisInstructions?: string | null
 ): string {
-  const truncatedContent = content.length > 4000 ? content.slice(0, 4000) + "..." : content;
+  // The original document is the ground truth the synthesizer is judging claims
+  // against — it used to be cut at 4,000 chars (about two pages) with a bare "...".
+  const truncatedContent = clipForPrompt(content, PROMPT_DOC_CHAR_LIMIT, "original content");
 
   const responsesXml = responses
     .map(

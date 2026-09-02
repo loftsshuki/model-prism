@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import { useEffect, useState } from "react";
 import { authHeaders } from "@/lib/client-api";
 
@@ -47,7 +49,7 @@ export default function HistoryPage() {
       <header className="bg-green text-cream">
         <div className="max-w-4xl mx-auto px-6 py-5 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <a href="/" className="flex items-center gap-4 hover:opacity-80 transition-opacity">
+            <Link href="/" className="flex items-center gap-4 hover:opacity-80 transition-opacity">
               <div className="w-9 h-9 border border-cream/30 flex items-center justify-center">
                 <span className="font-display text-lg font-bold tracking-tight">P</span>
               </div>
@@ -55,10 +57,10 @@ export default function HistoryPage() {
                 <h1 className="font-display text-xl font-bold tracking-tight leading-none">Model Prism</h1>
                 <p className="text-[10px] tracking-[0.2em] uppercase text-cream/50 mt-0.5">One Input, Many Angles</p>
               </div>
-            </a>
+            </Link>
           </div>
           <nav className="flex items-center gap-6">
-            <a href="/" className="cta-text text-cream/60 hover:text-cream transition-colors duration-300">New Run</a>
+            <Link href="/" className="cta-text text-cream/60 hover:text-cream transition-colors duration-300">New Run</Link>
             <span className="cta-text text-cream">History</span>
           </nav>
         </div>
@@ -76,7 +78,7 @@ export default function HistoryPage() {
 
         {!loading && runs.length === 0 && (
           <div className="text-center text-grey-40 py-12">
-            No runs yet. <a href="/" className="text-green hover:underline">Start your first analysis.</a>
+            No runs yet. <Link href="/" className="text-green hover:underline">Start your first analysis.</Link>
           </div>
         )}
 

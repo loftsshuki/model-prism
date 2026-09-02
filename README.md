@@ -30,7 +30,6 @@ It is used both as:
 ## Quick start
 
 ```bash
-cd C:/Dev/Tools/model-prism
 npm install
 npm run dev
 ```
@@ -45,8 +44,8 @@ http://localhost:3000
 
 For local browser use, keys are saved in browser localStorage from the Settings page:
 
-- OpenRouter API key: used for council fan-out
-- Anthropic API key: used for synthesis and context-pack brief enhancement
+- OpenRouter API key: used for council fan-out and context-pack brief enhancement
+- Anthropic API key: used for synthesis in the web app (the CLI synthesizes through OpenRouter instead)
 - GitHub PAT: optional, used for private-repo Context Packs
 - Admin token: optional, only needed when `MODEL_PRISM_ADMIN_TOKEN` is set on the server
 
@@ -78,11 +77,7 @@ npm run check-roster  # Check OpenRouter roster freshness
 npm run model-value   # Model value/telemetry analysis
 ```
 
-If Bun resolution fails, set:
-
-```bash
-BUN_BIN=C:/Users/shuki/.bun/bin/bun.exe npm test
-```
+Also available: `npm run typecheck`. If Bun resolution fails, set `BUN_BIN=/path/to/bun`.
 
 ## CLI plan review
 
@@ -97,8 +92,11 @@ npm run review -- docs/plans -- --batch
 npm run review -- docs/plans/my-plan.md -- --dry-run
 npm run review -- docs/plans/my-plan.md -- --roster cheap
 npm run review -- docs/plans/my-plan.md -- --roster auto
-npm run review -- docs/plans/my-plan.md -- --max-cost-per-plan 1.00
+npm run review -- docs/plans/my-plan.md -- --max-cost-per-plan 2.00
+npm run review -- docs/plans/my-plan.md -- --prism-mode fusion
 ```
+
+The per-plan cap covers council spend plus the projected merge cost (one call for legacy, two for fusion). `--max-cost` caps a whole batch.
 
 The CLI writes review files next to plans under `reviews/` by default.
 
@@ -143,11 +141,16 @@ Active routes:
 - `GET /api/runs/:id` — load saved run
 - `POST /api/save-response` — save model response
 - `POST /api/synthesize/save` — save direct-browser synthesis result
+- `GET/POST /api/telemetry` — model-value leaderboard and run telemetry
+- `GET/POST /api/plan-status` — plan approval status per run
+- `GET/POST /api/hook-jobs` — plan-review hook job dashboard
 
-Legacy compatibility routes:
+Legacy compatibility routes (both require the admin token when one is set):
 
 - `POST /api/invoke-model` — older server-side OpenRouter invocation path
 - `POST /api/synthesize` — older server-side synthesis path
+
+All POST routes validate their bodies and return `400` with the offending field; server failures return a generic `500`.
 
 The main app currently calls OpenRouter/Anthropic directly from the browser to avoid Vercel function duration limits.
 

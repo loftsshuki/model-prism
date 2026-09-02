@@ -80,6 +80,10 @@ export interface ModelResponse {
   cost?: number;
   /** Set when a flaky model failed and a reliable substitute answered this slot. */
   fallbackFrom?: string;
+  /** Machine-readable failure class (see OpenRouterErrorCode) so callers can decide retryability without string-matching. */
+  errorCode?: string;
+  /** OpenRouter finish_reason: "stop" | "length" | "tool_calls" | ... — "length" means the review was cut by max_tokens. */
+  finishReason?: string | null;
 }
 
 export interface RunState {

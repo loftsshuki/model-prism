@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { requireAdminToken } from "@/lib/api-auth";
+import { serverError } from "@/lib/api-validate";
 import { listRunTelemetry, saveRunTelemetry } from "@/lib/db";
 import {
   aggregateModelValue,
@@ -41,14 +42,7 @@ export async function GET(req: NextRequest) {
       recommendations: recommendRosterChanges(leaderboard),
     });
   } catch (error) {
-    return NextResponse.json({
-      telemetryPath: "database:run_telemetry",
-      runCount: 0,
-      leaderboard: [],
-      diagnostics: [],
-      recommendations: [],
-      error: error instanceof Error ? error.message : "Failed to load telemetry",
-    });
+    return serverError("telemetry GET", error, "Failed to load telemetry");
   }
 }
 
@@ -56,7 +50,7 @@ export async function POST(req: NextRequest) {
   const unauthorized = requireAdminToken(req);
   if (unauthorized) return unauthorized;
 
-  const body = await req.json() as {
+  let body: {
     content?: string;
     contextRepo?: string;
     durationSec?: number;
@@ -67,13 +61,20 @@ export async function POST(req: NextRequest) {
     synthesisModel?: string;
     usedModels?: ModelInfo[];
   };
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Request body must be valid JSON" }, { status: 400 });
+  }
 
   if (!body.synthesis || !body.responses?.length || !body.usedModels?.length) {
     return NextResponse.json({ error: "Missing telemetry fields" }, { status: 400 });
   }
 
   const contentHash = createHash("sha256").update(body.content || "").digest("hex").slice(0, 16);
-  const record = buildRunTelemetry({
+  let record: RunTelemetry;
+  try {
+    record = buildRunTelemetry({
     ts: new Date().toISOString(),
     plan: body.plan || "web-run",
     contentHash,
@@ -84,12 +85,17 @@ export async function POST(req: NextRequest) {
     synthesis: body.synthesis,
     responses: body.responses,
     usedModels: body.usedModels,
-  });
+    });
+  } catch (error) {
+    // A malformed shape used to throw outside any try → unhandled 500 with a stack.
+    console.error("[api] telemetry POST: could not build record:", error instanceof Error ? error.message : error);
+    return NextResponse.json({ error: "Telemetry payload has an unexpected shape" }, { status: 400 });
+  }
 
   try {
     await saveRunTelemetry(JSON.stringify(record));
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Failed to save telemetry" }, { status: 500 });
+    return serverError("telemetry POST", error, "Failed to save telemetry");
   }
 }

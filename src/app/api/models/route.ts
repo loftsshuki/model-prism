@@ -1,7 +1,18 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 
-// Cache models for 1 hour
-let cachedModels: OpenRouterModel[] | null = null;
+// Shape served to the client (mirrors ModelInfo in src/lib/types.ts).
+interface CatalogModel {
+  id: string;
+  name: string;
+  family: string;
+  tier: string;
+  contextLength: number;
+  inputCostPer1k: number;
+  outputCostPer1k: number;
+}
+
+// Cache models for 1 hour (per server instance).
+let cachedModels: CatalogModel[] | null = null;
 let cachedAt = 0;
 const CACHE_TTL = 60 * 60 * 1000;
 
@@ -89,8 +100,10 @@ function isTextModel(m: OpenRouterModel): boolean {
   return true;
 }
 
-export async function GET(req: NextRequest) {
-  const apiKey = req.headers.get("x-openrouter-key");
+export async function GET() {
+  // The /models catalog is public. The browser used to forward the user's OpenRouter
+  // key here, which transmitted a secret for no benefit and then served that
+  // key-scoped catalog to every visitor from the shared cache.
 
   // Return cached if fresh
   if (cachedModels && Date.now() - cachedAt < CACHE_TTL) {
@@ -98,21 +111,18 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-    };
-    if (apiKey) {
-      headers["Authorization"] = `Bearer ${apiKey}`;
-    }
-
-    const res = await fetch("https://openrouter.ai/api/v1/models", { headers });
+    const res = await fetch("https://openrouter.ai/api/v1/models", {
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(15_000),
+      next: { revalidate: 3600 },
+    });
 
     if (!res.ok) {
       // Fall back to cache if available
       if (cachedModels) {
         return NextResponse.json({ models: cachedModels, cached: true, stale: true });
       }
-      return NextResponse.json({ error: "Failed to fetch models" }, { status: res.status });
+      return NextResponse.json({ error: `Model catalog unavailable (upstream ${res.status})` }, { status: 502 });
     }
 
     const data = await res.json();
@@ -143,7 +153,7 @@ export async function GET(req: NextRequest) {
         return b.inputCostPer1k - a.inputCostPer1k;
       });
 
-    cachedModels = chatModels as unknown as OpenRouterModel[];
+    cachedModels = chatModels;
     cachedAt = Date.now();
 
     return NextResponse.json({ models: chatModels, cached: false, total: chatModels.length });
@@ -151,9 +161,7 @@ export async function GET(req: NextRequest) {
     if (cachedModels) {
       return NextResponse.json({ models: cachedModels, cached: true, stale: true });
     }
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to fetch models" },
-      { status: 500 }
-    );
+    console.error("[api] models:", error instanceof Error ? error.message : error);
+    return NextResponse.json({ error: "Model catalog unavailable" }, { status: 502 });
   }
 }

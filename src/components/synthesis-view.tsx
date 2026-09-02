@@ -1,4 +1,5 @@
 "use client";
+import { renderMarkdownLite } from "@/lib/markdown-lite";
 
 import { useMemo, useState } from "react";
 import { SynthesisResult } from "@/lib/types";
@@ -116,17 +117,9 @@ export function SynthesisView({
               [&_ul]:space-y-1.5 [&_li]:text-sm
               [&_p]:text-sm [&_p]:mb-3
               [&_ol]:space-y-1.5 [&_ol>li]:text-sm"
-            dangerouslySetInnerHTML={{
-              __html: synthesis.masterDocument
-                .replace(/^### (.*$)/gm, '<h3>$1</h3>')
-                .replace(/^## (.*$)/gm, '<h2>$1</h2>')
-                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                .replace(/^\- (.*$)/gm, '<li>$1</li>')
-                .replace(/(<li>.*<\/li>\n?)+/g, (match) => `<ul>${match}</ul>`)
-                .replace(/^\d+\. (.*$)/gm, '<li>$1</li>')
-                .replace(/\n\n/g, '</p><p>')
-                .replace(/^(?!<[hulo])/gm, (line) => line ? `<p>${line}` : '')
-            }}
+            // Escape-first renderer: model output can echo untrusted input (diffs, repo
+            // files); the previous regex chain injected it as raw HTML.
+            dangerouslySetInnerHTML={{ __html: renderMarkdownLite(synthesis.masterDocument) }}
           />
         </div>
       )}

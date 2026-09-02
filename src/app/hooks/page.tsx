@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import { useEffect, useMemo, useState } from "react";
 import { authHeaders } from "@/lib/client-api";
 import type { ModelValueRow, RosterRecommendation } from "@/lib/telemetry";
@@ -29,22 +31,33 @@ export default function HooksDashboardPage() {
   const [jobs, setJobs] = useState<HookJob[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const load = async () => {
-    setLoading(true);
-    const [telemetry, hookJobs] = await Promise.all([
-      fetch("/api/telemetry", { headers: authHeaders() }).then((r) => r.json()),
-      fetch("/api/hook-jobs", { headers: authHeaders() }).then((r) => r.json()).catch(() => ({ jobs: [] })),
-    ]);
-    setData(telemetry);
-    setJobs(hookJobs.jobs || []);
-    setLoading(false);
-  };
+  const [error, setError] = useState<string | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
+    // `loading` starts true; polls refresh silently instead of flashing the spinner.
+    const load = async () => {
+      try {
+        const [telemetry, hookJobs] = await Promise.all([
+          fetch("/api/telemetry", { headers: authHeaders() }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
+          fetch("/api/hook-jobs", { headers: authHeaders() }).then((r) => r.json()).catch(() => ({ jobs: [] })),
+        ]);
+        if (cancelled) return;
+        setData(telemetry);
+        setJobs(hookJobs.jobs || []);
+        setError(null);
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : "Failed to load dashboard");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
     load();
     const interval = window.setInterval(load, 15000);
-    return () => window.clearInterval(interval);
-  }, []);
+    return () => { cancelled = true; window.clearInterval(interval); };
+  }, [refreshTick]);
 
   const stats = useMemo(() => {
     const models = data?.leaderboard || [];
@@ -64,15 +77,20 @@ export default function HooksDashboardPage() {
       <div className="max-w-6xl mx-auto space-y-8">
         <header className="flex items-start justify-between gap-4">
           <div>
-            <a href="/" className="text-xs uppercase tracking-[0.2em] text-neutral-500 hover:text-neutral-300">← Back</a>
+            <Link href="/" className="text-xs uppercase tracking-[0.2em] text-neutral-500 hover:text-neutral-300">← Back</Link>
             <h1 className="mt-4 text-3xl font-semibold tracking-tight">Plan-Review Hook Dashboard</h1>
             <p className="mt-2 text-sm text-neutral-500">
               Live hook/council activity. Hook workers can POST jobs to <code>/api/hook-jobs</code>; this page refreshes automatically.
             </p>
           </div>
-          <button onClick={load} className="rounded-lg border border-neutral-800 px-4 py-2 text-sm text-neutral-300 hover:border-neutral-600">Refresh</button>
+          <button onClick={() => setRefreshTick((t) => t + 1)} className="rounded-lg border border-neutral-800 px-4 py-2 text-sm text-neutral-300 hover:border-neutral-600">Refresh</button>
         </header>
 
+        {error && (
+          <div className="rounded-xl border border-red-900 bg-red-950/40 p-4 text-sm text-red-300">
+            Could not load the dashboard: {error}. If an admin token is configured, enter it in Settings.
+          </div>
+        )}
         {loading ? (
           <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-6 text-neutral-400">Loading dashboard…</div>
         ) : (

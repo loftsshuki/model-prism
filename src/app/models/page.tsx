@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import { useEffect, useState } from "react";
 import { authHeaders } from "@/lib/client-api";
 import type { ModelFailureDiagnostic, ModelValueRow, RosterRecommendation } from "@/lib/telemetry";
@@ -26,32 +28,36 @@ export default function ModelsPage() {
   const [data, setData] = useState<TelemetryResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const load = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/telemetry", { headers: authHeaders() });
-      setData(await res.json());
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [refreshTick, setRefreshTick] = useState(0);
 
   useEffect(() => {
-    load();
-  }, []);
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/telemetry", { headers: authHeaders() });
+        const json = await res.json();
+        if (!cancelled) setData(json);
+      } catch {
+        if (!cancelled) setData(null);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [refreshTick]);
 
   return (
     <main className="min-h-screen bg-neutral-950 text-neutral-100 px-6 py-8">
       <div className="max-w-7xl mx-auto space-y-8">
         <header className="flex items-start justify-between gap-4">
           <div>
-            <a href="/" className="text-xs uppercase tracking-[0.2em] text-neutral-500 hover:text-neutral-300">← Back</a>
+            <Link href="/" className="text-xs uppercase tracking-[0.2em] text-neutral-500 hover:text-neutral-300">← Back</Link>
             <h1 className="mt-4 text-3xl font-semibold tracking-tight">Model Intelligence</h1>
             <p className="mt-2 text-sm text-neutral-500">
               Leaderboard, failure diagnostics, and roster recommendations from the local telemetry ledger.
             </p>
           </div>
-          <button onClick={load} className="rounded-lg border border-neutral-800 px-4 py-2 text-sm text-neutral-300 hover:border-neutral-600">
+          <button onClick={() => { setLoading(true); setRefreshTick((t) => t + 1); }} className="rounded-lg border border-neutral-800 px-4 py-2 text-sm text-neutral-300 hover:border-neutral-600">
             Refresh
           </button>
         </header>

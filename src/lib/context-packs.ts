@@ -1,5 +1,4 @@
 import { ContextPack, RepoFile } from "./types";
-import { estimateTokens } from "./model-registry";
 
 // --- localStorage CRUD (metadata only) ---
 

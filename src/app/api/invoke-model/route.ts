@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireAdminToken } from "@/lib/api-auth";
 
 // Legacy server-side invoke endpoint. The main app now calls OpenRouter directly
 // from the browser to avoid Vercel duration limits. Keep this route for manual
@@ -6,7 +7,18 @@ import { NextRequest, NextResponse } from "next/server";
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
-  const { model, content, prompt, apiKey, maxTokens } = await req.json();
+  // Legacy relay: without this gate anyone could burn this deployment's compute
+  // proxying their own OpenRouter traffic. Same admin token as the other routes.
+  const unauthorized = requireAdminToken(req);
+  if (unauthorized) return unauthorized;
+
+  let body: { model?: string; content?: string; prompt?: string; apiKey?: string; maxTokens?: number };
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Request body must be valid JSON" }, { status: 400 });
+  }
+  const { model, content, prompt, apiKey, maxTokens } = body;
 
   if (!apiKey) {
     return NextResponse.json(
@@ -85,7 +97,7 @@ export async function POST(req: NextRequest) {
     const isTimeout = error instanceof Error && error.name === "AbortError";
     return NextResponse.json(
       {
-        error: isTimeout ? "Model timed out (55s limit)" : (error instanceof Error ? error.message : "Unknown error"),
+        error: isTimeout ? "Model timed out (55s limit)" : "Upstream request failed",
         timeMs: Date.now() - startTime,
       },
       { status: isTimeout ? 504 : 500 }

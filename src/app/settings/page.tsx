@@ -1,10 +1,12 @@
 "use client";
 
+import Link from "next/link";
+
 import { useState, useEffect, useCallback } from "react";
 import { DEFAULT_TEMPLATES, PromptTemplate } from "@/lib/prompts";
 import { DEFAULT_RUN_PRESETS, ModelSelectionPreset } from "@/lib/run-presets";
 import { BUILT_IN_PROJECT_PROFILES, createProjectProfile, getCustomProjectProfiles, ProjectProfile, saveCustomProjectProfiles } from "@/lib/project-profiles";
-import { validatePat, getRateLimitInfo } from "@/lib/github";
+import { validatePat } from "@/lib/github";
 import { getCacheSize, getCacheEntryCount, clearAllCache } from "@/lib/context-cache";
 import { PatValidationResult } from "@/lib/types";
 
@@ -51,19 +53,25 @@ export default function SettingsPage() {
   const [cacheClearing, setCacheClearing] = useState(false);
 
   useEffect(() => {
-    setOpenrouterKey(getStoredKey("openrouter-api-key"));
-    setAnthropicKey(getStoredKey("anthropic-api-key"));
-    setAdminToken(getStoredKey("model-prism-admin-token"));
-    setSynthesisModel(getStoredKey("synthesis-model") || "sonnet");
-    setGithubPat(getStoredKey("github-pat"));
-    setCustomTemplates(getCustomTemplates());
-    setCustomProfiles(getCustomProjectProfiles());
-
-    // Load cache stats
+    let cancelled = false;
+    // Hydrate from localStorage after mount (server render has no storage). Done
+    // asynchronously so the state updates don't cascade inside the effect itself.
     (async () => {
-      setCacheSize(await getCacheSize());
-      setCacheEntries(await getCacheEntryCount());
+      await Promise.resolve();
+      if (cancelled) return;
+      setOpenrouterKey(getStoredKey("openrouter-api-key"));
+      setAnthropicKey(getStoredKey("anthropic-api-key"));
+      setAdminToken(getStoredKey("model-prism-admin-token"));
+      setSynthesisModel(getStoredKey("synthesis-model") || "sonnet");
+      setGithubPat(getStoredKey("github-pat"));
+      setCustomTemplates(getCustomTemplates());
+      setCustomProfiles(getCustomProjectProfiles());
+      const [size, entries] = await Promise.all([getCacheSize(), getCacheEntryCount()]);
+      if (cancelled) return;
+      setCacheSize(size);
+      setCacheEntries(entries);
     })();
+    return () => { cancelled = true; };
   }, []);
 
   const saveKeys = () => {
@@ -146,12 +154,12 @@ export default function SettingsPage() {
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
       <header className="border-b border-neutral-800 px-6 py-4">
         <div className="max-w-2xl mx-auto flex items-center gap-3">
-          <a href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+          <Link href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
               <span className="text-sm font-bold">P</span>
             </div>
             <h1 className="text-lg font-semibold">Model Prism</h1>
-          </a>
+          </Link>
           <span className="text-neutral-600">/</span>
           <span className="text-sm text-neutral-400">Settings</span>
         </div>

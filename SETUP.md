@@ -1,66 +1,49 @@
-# Model Prism — Setup Guide
+# Setup
 
-## Local Development
+## Prerequisites
 
-```bash
-cd C:\Dev\Tools\model-prism
-bun install
-bun dev
-```
+- Node 22 (or 20+) and npm
+- Bun 1.3+ (unit tests run under `bun test`)
+- An OpenRouter API key
+- Optional: a Neon/Postgres database for run history and telemetry
 
-Open http://localhost:3000, set your API keys, and start analyzing.
-
-Local dev uses a file-based SQLite database (`local.db`) — no setup needed.
-
-## API Keys
-
-Both keys are stored in your browser's localStorage. Set them in the app UI or on the Settings page.
-
-- **OpenRouter** — Get a key at https://openrouter.ai/keys
-- **Anthropic** — Get a key at https://console.anthropic.com (needed for synthesis only)
-
-## Deploy to Vercel
-
-### 1. Create a Turso Database
+## Install
 
 ```bash
-# Install Turso CLI
-curl -sSfL https://get.tur.so/install.sh | bash
-
-# Sign up / login
-turso auth signup   # or: turso auth login
-
-# Create database
-turso db create model-prism
-
-# Get connection URL
-turso db show model-prism --url
-
-# Create auth token
-turso db tokens create model-prism
+npm install
+cp .env.example .env.local   # fill in DATABASE_URL / MODEL_PRISM_ADMIN_TOKEN as needed
+npm run dev
 ```
 
-### 2. Set Vercel Environment Variables
+Open http://localhost:3000 and add your keys on the Settings page (they stay in the browser's localStorage).
+
+## Database
+
+Run history, syntheses, telemetry and plan statuses live in Postgres via `@neondatabase/serverless`:
+
+```env
+DATABASE_URL=postgres://...
+```
+
+Tables and indexes are created on first use (`src/lib/db.ts`, `initDb`). Without `DATABASE_URL` the app still runs; saves fail silently and History stays empty.
+
+## Protecting a public deployment
+
+Set `MODEL_PRISM_ADMIN_TOKEN` on the server and enter the same value in Settings. Every history/save/telemetry route then requires the `x-model-prism-token` header. If the variable is unset the routes are open, which is fine locally and logged as a warning in production.
+
+## CLI plan review
 
 ```bash
-vercel env add TURSO_DATABASE_URL    # paste the URL from step 1
-vercel env add TURSO_AUTH_TOKEN      # paste the token from step 1
+export OPENROUTER_API_KEY=sk-or-v1-...
+npm run review -- docs/plans/my-plan.md -- --dry-run
 ```
 
-Or set them in the Vercel dashboard under Project Settings > Environment Variables.
+See `docs/OPERATIONS.md` for flags, rosters and the plan-review hook.
 
-### 3. Deploy
+## Checks
 
 ```bash
-vercel --prod
+npm run lint && npm run typecheck && npm test && npm run build
 ```
 
-The database tables are auto-created on first request — no migration step needed.
-
-## Tech Stack
-
-- **Next.js 15** (App Router) + **Tailwind CSS** + **shadcn/ui**
-- **OpenRouter** for multi-model fan-out
-- **Anthropic API** via Vercel AI SDK for synthesis
-- **Turso/LibSQL** for persistence (SQLite in dev, serverless in prod)
-- **p-limit** for client-side request throttling
+`npm test` locates Bun through `scripts/run-bun-tests.mjs`; override with `BUN_BIN=/path/to/bun` if it cannot find it.

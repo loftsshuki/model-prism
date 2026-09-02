@@ -3,7 +3,6 @@
 ## Local development
 
 ```bash
-cd C:/Dev/Tools/model-prism
 npm run dev
 ```
 
@@ -12,15 +11,10 @@ Open `http://localhost:3000`.
 ## Build and test
 
 ```bash
-npm run build
-npm test
+npm run lint && npm run typecheck && npm test && npm run build
 ```
 
-On Windows, `npm test` uses `scripts/run-bun-tests.mjs` to find a real Bun executable. If needed:
-
-```bash
-BUN_BIN=C:/Users/shuki/.bun/bin/bun.exe npm test
-```
+`npm test` uses `scripts/run-bun-tests.mjs` to find a Bun executable. If needed, set `BUN_BIN=/path/to/bun`.
 
 ## Required services
 
@@ -30,7 +24,7 @@ Used for model council fan-out. Store the key from the Settings page.
 
 ### Anthropic
 
-Used for synthesis and context-pack brief enhancement. Store the key from the Settings page.
+Used by the web app for synthesis. Store the key from the Settings page. Brief enhancement and the CLI pipeline bill to OpenRouter instead.
 
 ### Neon/Postgres
 
@@ -69,25 +63,25 @@ If `MODEL_PRISM_ADMIN_TOKEN` is not set, routes remain open for local/internal u
 Single plan:
 
 ```bash
-npm run review -- C:/Dev/LuxuryApartments/docs/plans/2026-01-01-example.md
+npm run review -- path/to/repo/docs/plans/2026-01-01-example.md
 ```
 
 Dry run:
 
 ```bash
-npm run review -- C:/Dev/LuxuryApartments/docs/plans/2026-01-01-example.md -- --dry-run
+npm run review -- path/to/repo/docs/plans/2026-01-01-example.md -- --dry-run
 ```
 
 Batch folder:
 
 ```bash
-npm run review -- C:/Dev/LuxuryApartments/docs/plans -- --batch
+npm run review -- path/to/repo/docs/plans -- --batch
 ```
 
 Recommended safety flags for automated hooks:
 
 ```bash
-npm run review -- <plan.md> -- --roster default --max-cost-per-plan 1.00 --min-successful-models 6
+npm run review -- <plan.md> -- --roster default --max-cost-per-plan 6.00 --min-successful-models 6
 ```
 
 ## Rosters
@@ -115,14 +109,14 @@ Use the GitHub Actions roster freshness workflow to catch:
 `LuxuryApartments` opts in with:
 
 ```text
-C:/Dev/LuxuryApartments/.modelprismrc
+<consumer-repo>/.modelprismrc
 ```
 
 When an agent writes a matching plan, the global hook runs Model Prism and writes the reviewed output back to the plan workflow.
 
 Operational caution:
 
-- Keep the live checkout at `C:/Dev/Tools/model-prism` on the intended branch.
+- Keep the live model-prism checkout the hook points at on the intended branch.
 - After merging roster/hook changes, ensure the checkout used by hooks has been updated.
 - `TRACKING.md` should mention any required post-merge checkout reconciliation.
 

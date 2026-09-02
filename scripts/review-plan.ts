@@ -95,6 +95,11 @@ interface Args {
   fusionAgentic: boolean;             // repo-grep/web members on high-risk (default OFF)
 }
 
+// Merge-stage pricing for the circuit breaker (Opus 4.8 via OpenRouter, USD per 1M tokens).
+// Keep next to OPENROUTER_SYNTHESIS_MODEL_ID when that changes.
+const SYNTHESIS_PRICE_PER_M = { input: 5, output: 25 };
+const ESTIMATED_MERGE_OUTPUT_TOKENS = 8000; // a rewritten master plan as tool-call JSON
+
 function parseArgs(): Args {
   const argv = process.argv.slice(2);
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
@@ -623,8 +628,9 @@ async function reviewPlan(
   openrouterKey: string,
   reviewPromptOverride: string | null,
   synthesisPromptOverride: string | null,
-  activeCouncilModels: ModelInfo[]
-): Promise<{ skipped: boolean; skipReason?: "already-reviewed" | "dry-run"; reviewPath?: string; error?: string }> {
+  activeCouncilModels: ModelInfo[],
+  resolvedRosterName: string
+): Promise<{ skipped: boolean; skipReason?: "already-reviewed" | "dry-run"; reviewPath?: string; error?: string; cost?: number }> {
   const planContent = fs.readFileSync(planPath, "utf-8");
   const contentHash = hashContent(planContent);
   // In --output-path mode the cache-hash check reads the explicit output;
@@ -685,8 +691,6 @@ async function reviewPlan(
     : "";
 
   const contextString = baseContext + referencedSection;
-  const planName = path.basename(planPath);
-
   // Use custom review prompt if provided, otherwise built-in plan-review prompt.
   const effectiveReviewPrompt = reviewPromptOverride ?? REVIEW_PROMPT;
 
@@ -712,33 +716,48 @@ async function reviewPlan(
         const symbol = resp.status === "complete" ? "✓" : "✗";
         const suffix = resp.status === "error" && resp.error
           ? `  [${resp.error.slice(0, 80)}]`
-          : "";
+          : resp.finishReason === "length"
+            ? "  [warning: review cut off by max_tokens]"
+            : "";
         process.stdout.write(`    ${symbol} ${info?.name ?? modelId} (${completedCount}/${activeCouncilModels.length})${suffix}\n`);
       }
     },
   });
+
+  const fatal = responses.find((r) => r.errorCode === "auth" || r.errorCode === "payment");
+  if (fatal && !responses.some((r) => r.status === "complete")) {
+    return { skipped: false, error: `OpenRouter rejected the council calls (${fatal.errorCode}): ${fatal.error}`, cost: 0 };
+  }
 
   const successful = responses.filter((r) => r.status === "complete" && r.response);
   if (successful.length < args.minSuccessfulModels) {
     return {
       skipped: false,
       error: `Only ${successful.length}/${activeCouncilModels.length} models succeeded — need ≥${args.minSuccessfulModels} for reliable synthesis (configure via --min-successful-models)`,
+      cost: responses.reduce((sum, r) => sum + (r.cost ?? 0), 0),
     };
   }
 
-  // Estimate synthesis cost as a circuit breaker
+  // Circuit breaker: what the merge stage is about to cost, plus what the council
+  // already cost. The old estimate priced the synthesizer at Opus 4.6 rates
+  // ($15/$75 per M) while the model is Opus 4.8 ($5/$25 per M) — a 3× over-estimate
+  // that tripped the 1.00 cap on ordinary plans and forced the cap up to 6.00.
+  const councilCost = responses.reduce((sum, r) => sum + (r.cost ?? 0), 0);
   const totalResponseChars = successful.reduce((sum, r) => sum + (r.response?.length ?? 0), 0);
-  const estimatedSynthesisInputTokens = Math.ceil((totalResponseChars + planContent.length + (contextString?.length ?? 0)) / 4);
-  const estimatedSynthesisOutputTokens = 4000; // typical Opus synthesis output
-  // Opus 4.6: $15/1M input, $75/1M output
-  const estimatedSynthesisCost =
-    (estimatedSynthesisInputTokens / 1_000_000) * 15 +
-    (estimatedSynthesisOutputTokens / 1_000_000) * 75;
+  const estimatedMergeInputTokens = Math.ceil((totalResponseChars + planContent.length + (contextString?.length ?? 0)) / 4);
+  const mergeCalls = args.prismMode === "fusion" && args.fusionTwoStage ? 2 : 1; // judge + synthesizer
+  const estimatedMergeCost = mergeCalls * (
+    (estimatedMergeInputTokens / 1_000_000) * SYNTHESIS_PRICE_PER_M.input +
+    (ESTIMATED_MERGE_OUTPUT_TOKENS / 1_000_000) * SYNTHESIS_PRICE_PER_M.output
+  );
+  const projectedPlanCost = councilCost + estimatedMergeCost;
+  console.log(`  Council spend so far: $${councilCost.toFixed(3)}; projected merge (${mergeCalls} call${mergeCalls > 1 ? "s" : ""}): ~$${estimatedMergeCost.toFixed(3)}`);
 
-  if (estimatedSynthesisCost > args.maxCostPerPlan) {
+  if (projectedPlanCost > args.maxCostPerPlan) {
     return {
       skipped: false,
-      error: `Projected Opus synthesis cost ($${estimatedSynthesisCost.toFixed(3)}) exceeds per-plan cap ($${args.maxCostPerPlan.toFixed(2)}). Raise --max-cost-per-plan or reduce plan/context size.`,
+      error: `Projected plan cost ($${projectedPlanCost.toFixed(3)} = council $${councilCost.toFixed(3)} + merge ~$${estimatedMergeCost.toFixed(3)}) exceeds per-plan cap ($${args.maxCostPerPlan.toFixed(2)}). Raise --max-cost-per-plan or reduce plan/context size.`,
+      cost: councilCost,
     };
   }
 
@@ -811,7 +830,7 @@ async function reviewPlan(
       });
     }
   } else {
-    console.log(`  Synthesizing with ${OPENROUTER_SYNTHESIS_MODEL_ID} (via OpenRouter)... (estimated cost: $${estimatedSynthesisCost.toFixed(3)})`);
+    console.log(`  Synthesizing with ${OPENROUTER_SYNTHESIS_MODEL_ID} (via OpenRouter)... (estimated cost: ~$${estimatedMergeCost.toFixed(3)})`);
     synthesis = await synthesizeViaOpenRouter({
       openrouterKey, content: planContent, analysisPrompt: effectiveReviewPrompt,
       responses: synthesisResponses, context: contextString, customSynthesisInstructions: synthesisPromptOverride,
@@ -819,6 +838,9 @@ async function reviewPlan(
   }
 
   const durationSec = Math.round((Date.now() - startTime) / 1000);
+  const mergeCost = fusionInfo?.phases.reduce((sum, p) => sum + (p.cost ?? 0), 0) ?? estimatedMergeCost;
+  const totalPlanCost = councilCost + mergeCost;
+  console.log(`  Plan cost: $${totalPlanCost.toFixed(3)} (council $${councilCost.toFixed(3)} + merge ${fusionInfo ? "$" : "~$"}${mergeCost.toFixed(3)})`);
   const totalInputTokens = responses.reduce((sum, r) => sum + (r.inputTokens ?? 0), 0);
   const totalOutputTokens = responses.reduce((sum, r) => sum + (r.outputTokens ?? 0), 0);
 
@@ -850,7 +872,7 @@ async function reviewPlan(
         ts: new Date().toISOString(),
         plan: path.basename(planPath),
         contextRepo: context.repoName,
-        roster: args.roster ?? "default",
+        roster: resolvedRosterName,
         fellBackToLegacy: prismFallback === "legacy",
         phases: fusionInfo?.phases ?? [],
         evidenceKept: fusionInfo?.evidenceKept ?? 0,
@@ -872,7 +894,7 @@ async function reviewPlan(
       plan: path.basename(planPath),
       contentHash,
       contextRepo: context.repoName,
-      roster: args.roster ?? "default",
+      roster: resolvedRosterName,
       synthesisModel: OPENROUTER_SYNTHESIS_MODEL_ID,
       durationSec,
       synthesis,
@@ -891,7 +913,7 @@ async function reviewPlan(
       ts: new Date().toISOString(),
       plan: path.basename(planPath),
       contextRepo: context.repoName,
-      roster: args.roster ?? "default",
+      roster: resolvedRosterName,
       synthesisModel: OPENROUTER_SYNTHESIS_MODEL_ID,
       durationSec,
       synthesis,
@@ -904,7 +926,7 @@ async function reviewPlan(
     console.error(`  (review findings not recorded: ${e instanceof Error ? e.message : e})`);
   }
 
-  return { skipped: false, reviewPath: outputPath };
+  return { skipped: false, reviewPath: outputPath, cost: totalPlanCost };
 }
 
 // Resolve a roster preset name + exclusions into the active council, or an error string.
@@ -1031,6 +1053,7 @@ async function main(): Promise<number> {
   let reviewed = 0;
   let skipped = 0;
   let failed = 0;
+  let cumulativeCost = 0;
 
   for (const planPath of plans) {
     const relPath = path.relative(process.cwd(), planPath);
@@ -1038,6 +1061,7 @@ async function main(): Promise<number> {
 
     // Resolve the council for THIS plan: fixed roster, or stakes-adaptive under `auto`.
     let councilForPlan = staticCouncil;
+    let resolvedRoster = requestedRoster;
     if (isAutoRoster) {
       const pick = resolveAutoRoster(fs.readFileSync(planPath, "utf-8"), args.autoThresholdTokens);
       const built = buildCouncil(pick.roster, excludeSet, args.minSuccessfulModels, false);
@@ -1047,7 +1071,15 @@ async function main(): Promise<number> {
         continue;
       }
       councilForPlan = built.models;
+      resolvedRoster = pick.roster;
       console.log(`  Auto-roster: ${pick.roster} (${pick.reason})`);
+    }
+
+    // Batch-level cap (--max-cost). Previously parsed but never read.
+    if (cumulativeCost >= args.maxCost) {
+      console.log(`  ✗ Skipped: cumulative spend $${cumulativeCost.toFixed(2)} has reached --max-cost $${args.maxCost.toFixed(2)}`);
+      failed++;
+      continue;
     }
 
     try {
@@ -1059,7 +1091,9 @@ async function main(): Promise<number> {
         reviewPromptOverride,
         synthesisPromptOverride,
         councilForPlan!,
+        resolvedRoster,
       );
+      cumulativeCost += result.cost ?? 0;
       if (result.error) {
         console.log(`  ✗ Failed: ${result.error}`);
         failed++;
@@ -1080,7 +1114,7 @@ async function main(): Promise<number> {
   }
 
   console.log(`\n${"─".repeat(50)}`);
-  console.log(`Done: ${reviewed} reviewed, ${skipped} skipped, ${failed} failed`);
+  console.log(`Done: ${reviewed} reviewed, ${skipped} skipped, ${failed} failed — total spend $${cumulativeCost.toFixed(3)}`);
 
   return failed > 0 ? 1 : 0;
 }

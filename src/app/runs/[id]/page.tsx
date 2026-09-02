@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { SynthesisResult } from "@/lib/types";
@@ -33,7 +35,7 @@ interface SavedRun {
 
 function exportToMarkdown(run: SavedRun): string {
   const lines: string[] = [];
-  lines.push(`# Model Prism Run — ${new Date(run.created_at + "Z").toLocaleString()}`);
+  lines.push(`# Model Prism Run — ${parseDbDate(run.created_at).toLocaleString()}`);
   lines.push("");
   lines.push(`## Prompt`);
   lines.push(run.prompt);
@@ -123,9 +125,17 @@ function downloadMarkdown(content: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+// Neon returns TIMESTAMP columns as ISO strings that already end in "Z"; older
+// rows/other drivers may give "YYYY-MM-DD HH:MM:SS". Appending "Z" blindly produced
+// "…ZZ" → Invalid Date → RangeError from toISOString() in the export handlers.
+function parseDbDate(raw: string): Date {
+  const d = new Date(raw.includes("T") || raw.endsWith("Z") ? raw : raw.replace(" ", "T") + "Z");
+  return isNaN(d.getTime()) ? new Date() : d;
+}
+
 function formatDate(raw: string) {
   try {
-    const d = new Date(raw.includes("T") ? raw : raw + "Z");
+    const d = parseDbDate(raw);
     if (isNaN(d.getTime())) return "";
     return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) +
       " at " + d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
@@ -180,7 +190,7 @@ export default function RunPage() {
   const handleExport = () => {
     if (!run) return;
     const md = exportToMarkdown(run);
-    const date = new Date(run.created_at + "Z").toISOString().slice(0, 10);
+    const date = parseDbDate(run.created_at).toISOString().slice(0, 10);
     downloadMarkdown(md, `model-prism-${date}-${run.id.slice(0, 8)}.md`);
   };
 
@@ -194,7 +204,7 @@ export default function RunPage() {
       actionChecklist: run.synthesis ? buildActionChecklistMarkdown(extractActionItems(run.synthesis)) : undefined,
       files,
     });
-    const date = new Date(run.created_at + "Z").toISOString().slice(0, 10);
+    const date = parseDbDate(run.created_at).toISOString().slice(0, 10);
     downloadMarkdown(md, `github-review-${date}-${run.id.slice(0, 8)}.md`);
   };
 
@@ -217,7 +227,7 @@ export default function RunPage() {
     if (!run) return;
     const frontmatter = buildPlanFrontmatter({
       status,
-      reviewedAt: new Date(run.created_at + "Z").toISOString(),
+      reviewedAt: parseDbDate(run.created_at).toISOString(),
       approvedAt: ["founder-approved", "ready", "executed"].includes(status) ? new Date().toISOString() : undefined,
       reviewModel: run.synthesisModel,
       roster: run.models,
@@ -251,7 +261,7 @@ export default function RunPage() {
       <header className="bg-green text-cream">
         <div className="max-w-5xl mx-auto px-6 py-5 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <a href="/" className="flex items-center gap-4 hover:opacity-80 transition-opacity">
+            <Link href="/" className="flex items-center gap-4 hover:opacity-80 transition-opacity">
               <div className="w-9 h-9 border border-cream/30 flex items-center justify-center">
                 <span className="font-display text-lg font-bold tracking-tight">P</span>
               </div>
@@ -259,7 +269,7 @@ export default function RunPage() {
                 <h1 className="font-display text-xl font-bold tracking-tight leading-none">Model Prism</h1>
                 <p className="text-[10px] tracking-[0.2em] uppercase text-cream/50 mt-0.5">One Input, Many Angles</p>
               </div>
-            </a>
+            </Link>
           </div>
           <div className="flex items-center gap-4">
             <button
@@ -280,9 +290,9 @@ export default function RunPage() {
             >
               Re-run
             </button>
-            <a href="/history" className="cta-text text-cream/60 hover:text-cream transition-colors duration-300">
+            <Link href="/history" className="cta-text text-cream/60 hover:text-cream transition-colors duration-300">
               History
-            </a>
+            </Link>
           </div>
         </div>
       </header>

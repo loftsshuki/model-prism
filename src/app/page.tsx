@@ -6,7 +6,7 @@ import { FALLBACK_MODELS, estimateTokens, getModelsFilteredByContext, estimateCo
 import { DEFAULT_TEMPLATES, PromptTemplate } from "@/lib/prompts";
 import { DEFAULT_RUN_PRESETS, ModelSelectionPreset, selectModelsForPreset } from "@/lib/run-presets";
 import { getActiveProjectProfileId, getProjectProfiles, ProjectProfile, setActiveProjectProfileId } from "@/lib/project-profiles";
-import { fanOut } from "@/lib/fan-out";
+import { fanOut, isRetryableFailure } from "@/lib/fan-out";
 import { SYNTHESIS_MODEL_IDS, synthesizeDirect } from "@/lib/synthesis";
 import { getContextPacks, getActivePackId, buildContextString } from "@/lib/context-packs";
 import { jsonHeaders } from "@/lib/client-api";
@@ -94,70 +94,75 @@ export default function Home() {
     ...customTemplates,
   ], [customTemplates]);
 
-  // Load active context pack on mount
+  // Load active context pack on mount (after paint; localStorage is browser-only)
   useEffect(() => {
-    const activeId = getActivePackId();
-    if (activeId) {
-      const packs = getContextPacks();
-      const pack = packs.find((p) => p.id === activeId);
-      if (pack) {
-        setActivePack(pack);
-        setContextEnabled(true);
-        // Load cached file contents
-        (async () => {
-          const contents: Record<string, string> = {};
-          for (const path of pack.selectedFiles) {
-            const cached = await getCachedFileContent(pack.repo, pack.branch, path);
-            if (cached) contents[path] = cached.content;
-          }
-          setContextFileContents(contents);
-        })();
+    let cancelled = false;
+    (async () => {
+      await Promise.resolve();
+      if (cancelled) return;
+      const activeId = getActivePackId();
+      if (!activeId) return;
+      const pack = getContextPacks().find((p) => p.id === activeId);
+      if (!pack) return;
+      setActivePack(pack);
+      setContextEnabled(true);
+      // Load cached file contents
+      const contents: Record<string, string> = {};
+      for (const path of pack.selectedFiles) {
+        const cached = await getCachedFileContent(pack.repo, pack.branch, path);
+        if (cached) contents[path] = cached.content;
       }
-    }
+      if (!cancelled) setContextFileContents(contents);
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
-    setCustomTemplates(getCustomTemplates());
-    const profiles = getProjectProfiles();
-    const activeProfile = getActiveProjectProfileId();
-    setProjectProfiles(profiles);
-    setActiveProfileId(activeProfile);
-    const profile = profiles.find((p) => p.id === activeProfile);
-    if (profile) {
-      setSelectedRunPresetId(profile.defaultRunPresetId);
-      setSynthesisModel(profile.defaultSynthesisModel);
-      setMaxRunCost(profile.defaultMaxCost);
-      localStorage.setItem("synthesis-model", profile.defaultSynthesisModel);
-      localStorage.setItem("model-prism-max-run-cost", String(profile.defaultMaxCost));
-    }
-    const storedPreset = localStorage.getItem("model-prism-run-preset");
-    if (storedPreset) setSelectedRunPresetId(storedPreset);
-    const rerunData = sessionStorage.getItem("rerun");
-    if (rerunData) {
-      try {
-        const { content: rc, prompt: rp } = JSON.parse(rerunData);
-        if (rc) setContent(rc);
-        if (rp) setPrompt(rp);
-      } catch {}
-      sessionStorage.removeItem("rerun");
-    }
-    const key = localStorage.getItem("openrouter-api-key") || "";
-    const headers: Record<string, string> = {};
-    if (key) headers["x-openrouter-key"] = key;
-    fetch("/api/models", { headers })
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.models?.length > 0) {
-          setAllModels(data.models);
-          const frontierIds = data.models
-            .filter((m: ModelInfo) => m.tier === "frontier")
-            .slice(0, 8)
-            .map((m: ModelInfo) => m.id);
-          setSelectedModels(new Set<string>(frontierIds));
-        }
-        setModelsLoading(false);
-      })
-      .catch(() => setModelsLoading(false));
+    // Hydrate profile/template settings from localStorage after mount.
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (cancelled) return;
+      setCustomTemplates(getCustomTemplates());
+      const profiles = getProjectProfiles();
+      const activeProfile = getActiveProjectProfileId();
+      setProjectProfiles(profiles);
+      setActiveProfileId(activeProfile);
+      const profile = profiles.find((p) => p.id === activeProfile);
+      if (profile) {
+        setSelectedRunPresetId(profile.defaultRunPresetId);
+        setSynthesisModel(profile.defaultSynthesisModel);
+        setMaxRunCost(profile.defaultMaxCost);
+        localStorage.setItem("synthesis-model", profile.defaultSynthesisModel);
+        localStorage.setItem("model-prism-max-run-cost", String(profile.defaultMaxCost));
+      }
+      const storedPreset = localStorage.getItem("model-prism-run-preset");
+      if (storedPreset) setSelectedRunPresetId(storedPreset);
+      const rerunData = sessionStorage.getItem("rerun");
+      if (rerunData) {
+        try {
+          const { content: rc, prompt: rp } = JSON.parse(rerunData);
+          if (rc) setContent(rc);
+          if (rp) setPrompt(rp);
+        } catch {}
+        sessionStorage.removeItem("rerun");
+      }
+      // The catalog is public; the user's key is never sent to our server.
+      fetch("/api/models")
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.models?.length > 0) {
+            setAllModels(data.models);
+            const frontierIds = data.models
+              .filter((m: ModelInfo) => m.tier === "frontier")
+              .slice(0, 8)
+              .map((m: ModelInfo) => m.id);
+            setSelectedModels(new Set<string>(frontierIds));
+          }
+          setModelsLoading(false);
+        })
+        .catch(() => setModelsLoading(false));
+    });
+    return () => { cancelled = true; };
   }, []);
 
   // Re-read GitHub PAT from localStorage (settings page might update it)
@@ -325,7 +330,7 @@ export default function Home() {
   }, [activePack, contextEnabled, contextFileContents]);
 
   const runSynthesis = useCallback(
-    async (runId: string, completedResponses: ModelResponse[], durationSec = 0) => {
+    async (runId: string | null, completedResponses: ModelResponse[], durationSec = 0) => {
       if (!anthropicKey) { setStatus("complete"); return; }
       setStatus("synthesizing");
       setSynthesisError(null);
@@ -372,7 +377,7 @@ export default function Home() {
       }
       setStatus("complete");
     },
-    [activePack?.repo, anthropicKey, content, prompt, selectedRunPresetId, synthesisModel, allModels, getContextString]
+    [activePack, anthropicKey, content, prompt, selectedRunPresetId, synthesisModel, allModels, getContextString]
   );
 
   const runSecondPass = useCallback(async () => {
@@ -425,8 +430,12 @@ Produce a revised masterDocument that starts with a direct verdict: APPROVE, APP
   }, [allModels, anthropicKey, content, getContextString, prompt, responses, synthesis, synthesisModel]);
 
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
-  const [aborted, setAborted] = useState(false);
   const abortRef = useRef(false);
+  // Timer (declared before the handlers that reset it)
+  const [runStartTime, setRunStartTime] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  // Cancels in-flight OpenRouter requests on Stop (abortRef alone only stopped NEW requests).
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const handleRun = useCallback(async () => {
     if (!content.trim() || !prompt.trim() || selectedModels.size === 0) return;
@@ -501,7 +510,9 @@ Produce a revised masterDocument that starts with a direct verdict: APPROVE, APP
     };
 
     abortRef.current = false;
-    setAborted(false);
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     const contextString = getContextString();
     const newResults = await fanOut({
@@ -512,9 +523,13 @@ Produce a revised masterDocument that starts with a direct verdict: APPROVE, APP
       runId,
       maxTokens: 4096,
       isAborted: () => abortRef.current,
+      signal: controller.signal,
       onUpdate,
       context: contextString,
     });
+
+    // The user pressed Stop: keep whatever finished, but don't start (and bill) a synthesis.
+    if (abortRef.current) { setStatus("complete"); return; }
 
     // Combine with existing successful responses for synthesis
     const allCompleted = [
@@ -526,7 +541,7 @@ Produce a revised masterDocument that starts with a direct verdict: APPROVE, APP
 
   const handleStop = useCallback(() => {
     abortRef.current = true;
-    setAborted(true);
+    abortControllerRef.current?.abort();
     setStatus("complete");
   }, []);
 
@@ -534,7 +549,7 @@ Produce a revised masterDocument that starts with a direct verdict: APPROVE, APP
     if (!apiKey) return;
     const failedModels = allModels.filter((m) => {
       const r = responses.get(m.id);
-      return r && r.status === "error" && !r.error?.includes("404") && !r.error?.includes("unavailable");
+      return r ? isRetryableFailure(r) : false;
     });
     if (failedModels.length === 0) return;
 
@@ -544,7 +559,9 @@ Produce a revised masterDocument that starts with a direct verdict: APPROVE, APP
     setRunStartTime(runStartedAt);
     setElapsed(0);
     abortRef.current = false;
-    setAborted(false);
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     // Reset failed models to pending
     setResponses((prev) => {
@@ -566,9 +583,12 @@ Produce a revised masterDocument that starts with a direct verdict: APPROVE, APP
       runId,
       maxTokens: 4096,
       isAborted: () => abortRef.current,
+      signal: controller.signal,
       onUpdate,
       context: contextString,
     });
+
+    if (abortRef.current) { setStatus("complete"); return; }
 
     const allCompleted = [
       ...[...responses.values()].filter((r) => r.status === "complete" && !failedModels.find((m) => m.id === r.model)),
@@ -584,26 +604,18 @@ Produce a revised masterDocument that starts with a direct verdict: APPROVE, APP
 
   // How many selected models haven't been run yet
   const alreadyCompleted = new Set([...responses.keys()].filter((id) => responses.get(id)?.status === "complete"));
-  const retryableCount = [...responses.values()].filter((r) => r.status === "error" && !r.error?.includes("404") && !r.error?.includes("unavailable")).length;
+  const retryableCount = [...responses.values()].filter(isRetryableFailure).length;
   const newModelsCount = [...selectedModels].filter((id) => !alreadyCompleted.has(id)).length;
 
-  // Timer
-  const [runStartTime, setRunStartTime] = useState<number | null>(null);
-  const [elapsed, setElapsed] = useState(0);
-
   useEffect(() => {
-    if (status === "running" || status === "synthesizing") {
-      if (!runStartTime) setRunStartTime(Date.now());
-      const interval = setInterval(() => {
-        setElapsed(Math.floor((Date.now() - (runStartTime || Date.now())) / 1000));
-      }, 1000);
-      return () => clearInterval(interval);
-    } else {
-      if (runStartTime) {
-        setElapsed(Math.floor((Date.now() - runStartTime) / 1000));
-        setRunStartTime(null);
-      }
-    }
+    // The run handlers set runStartTime before flipping status, so no fallback
+    // write is needed here; the last tick before cleanup is the final elapsed value.
+    if (status !== "running" && status !== "synthesizing") return;
+    const start = runStartTime ?? Date.now();
+    const interval = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
   }, [status, runStartTime]);
 
   function formatElapsed(s: number): string {
@@ -793,7 +805,7 @@ Produce a revised masterDocument that starts with a direct verdict: APPROVE, APP
             {/* Section: Codebase Context */}
             <ContextPanel
               githubPat={githubPat}
-              anthropicKey={anthropicKey}
+              openrouterKey={apiKey}
               activePack={activePack}
               contextEnabled={contextEnabled}
               contentText={content}
@@ -976,7 +988,7 @@ Produce a revised masterDocument that starts with a direct verdict: APPROVE, APP
                       {!synthesis && anthropicKey && successCount >= 2 && (
                         <div className="flex items-center gap-3">
                           <button onClick={() => { setSynthesisError(null); runSynthesis(
-                            "manual",
+                            currentRunId,
                             [...responses.values()].filter((r) => r.status === "complete")
                           ); }}
                             className="cta-text px-5 py-2 bg-green text-cream hover:bg-green-hover transition-colors duration-300">

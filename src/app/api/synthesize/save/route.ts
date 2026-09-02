@@ -1,22 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { saveSynthesis } from "@/lib/db";
 import { requireAdminToken } from "@/lib/api-auth";
+import { idField, parseBody, serverError, textField } from "@/lib/api-validate";
+
+const SaveSynthesisBody = z.object({
+  runId: idField,
+  result: textField.min(1),
+  modelUsed: z.string().min(1).max(200),
+});
 
 export async function POST(req: NextRequest) {
   const unauthorized = requireAdminToken(req);
   if (unauthorized) return unauthorized;
 
-  const { runId, result, modelUsed } = await req.json();
-
-  if (!runId || !result || !modelUsed) {
-    return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
-  }
+  const body = await parseBody(req, SaveSynthesisBody);
+  if (!body.ok) return body.response;
 
   try {
-    await saveSynthesis(runId, result, modelUsed);
+    await saveSynthesis(body.data.runId, body.data.result, body.data.modelUsed);
     return NextResponse.json({ ok: true });
   } catch (error) {
-    console.error("Save synthesis error:", error);
-    return NextResponse.json({ error: "Failed to save" }, { status: 500 });
+    return serverError("save synthesis", error, "Failed to save");
   }
 }

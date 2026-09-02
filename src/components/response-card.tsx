@@ -78,7 +78,14 @@ export function ResponseCard({
       )}
 
       {response.status === "pending" && <p className="mt-2 text-[10px] text-grey-20 tracking-wide">Waiting...</p>}
-      {response.status === "streaming" && <p className="mt-2 text-[10px] text-gold tracking-wide">Analyzing...</p>}
+      {response.status === "streaming" && (
+        <>
+          <p className="mt-2 text-[10px] text-gold tracking-wide">{response.response ? "Streaming..." : "Analyzing..."}</p>
+          {response.response && (
+            <p className="mt-2 text-sm text-grey-40 line-clamp-4 leading-relaxed whitespace-pre-wrap">{response.response}</p>
+          )}
+        </>
+      )}
     </div>
   );
 }
