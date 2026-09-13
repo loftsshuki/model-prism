@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminToken, runOwner } from "@/lib/api-auth";
-import { getPlanStatus, savePlanStatus } from "@/lib/db";
-import { getRun } from "@/lib/db";
+import { getRun, getPlanStatus, savePlanStatus } from "@/lib/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

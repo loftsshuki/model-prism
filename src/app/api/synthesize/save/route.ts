@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { saveSynthesis, updateRunCost } from "@/lib/db";
-import { getRun } from "@/lib/db";
+import { getRun, saveSynthesis, updateRunCost } from "@/lib/db";
 import { requireAdminToken, runOwner } from "@/lib/api-auth";
 
 export async function POST(req: NextRequest) {
