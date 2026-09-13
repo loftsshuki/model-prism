@@ -20,9 +20,9 @@ export function CompareView({ responses, onClose }: CompareViewProps) {
           Close
         </button>
       </div>
-      <div className="flex-1 overflow-hidden flex bg-cream">
+      <div className="flex-1 overflow-auto flex flex-col sm:flex-row bg-cream">
         {responses.map((r) => (
-          <div key={r.model} className="flex-1 min-w-0 border-r border-border last:border-r-0 flex flex-col">
+          <div key={r.model} className="flex-1 min-w-0 min-h-64 border-r border-border last:border-r-0 flex flex-col">
             <div className="px-5 py-4 border-b border-border bg-white">
               <p className="text-sm font-medium text-ink truncate">{r.modelName}</p>
               <div className="flex gap-4 text-[10px] text-grey-30 mt-1 tracking-wide">

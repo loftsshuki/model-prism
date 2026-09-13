@@ -1,6 +1,7 @@
 import { ModelInfo } from "./types";
+import { getCouncilModels } from "./model-catalog";
 
-export type ModelSelectionPreset = "frontier" | "diverse" | "all" | "free";
+export type ModelSelectionPreset = "frontier" | "diverse" | "cheap" | "all" | "free";
 
 export interface RunPreset {
   id: string;
@@ -77,25 +78,14 @@ export function selectModelsForPreset(
   const available = models.filter((model) => !tooSmall.has(model.id));
 
   if (preset === "free") {
-    return new Set(available.filter((model) => model.tier === "free").map((model) => model.id));
-  }
-
-  if (preset === "frontier") {
-    return new Set(available.filter((model) => model.tier === "frontier").slice(0, 8).map((model) => model.id));
-  }
-
-  if (preset === "diverse") {
     const seen = new Set<string>();
-    const diverse: string[] = [];
-    for (const model of available) {
-      const key = `${model.family}-${model.tier}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        diverse.push(model.id);
-      }
-      if (diverse.length >= 10) break;
-    }
-    return new Set(diverse);
+    return new Set(available.filter((m) => {
+      if (m.tier !== "free" || seen.has(m.family)) return false;
+      seen.add(m.family); return true;
+    }).slice(0, 5).map((m) => m.id));
+  }
+  if (preset !== "all") {
+    return new Set(getCouncilModels(preset === "diverse" ? "balanced" : preset, available).map((m) => m.id));
   }
 
   return new Set(available.map((model) => model.id));

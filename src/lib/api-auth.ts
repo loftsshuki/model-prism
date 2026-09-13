@@ -1,4 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createHash } from "node:crypto";
+
+export function runOwner(req: NextRequest): string | null {
+  const token = req.headers.get("x-model-prism-owner") ?? "";
+  return /^[a-f0-9]{64}$/.test(token) ? createHash("sha256").update(token).digest("hex") : null;
+}
 
 export function requireAdminToken(req: NextRequest) {
   const expected = process.env.MODEL_PRISM_ADMIN_TOKEN;

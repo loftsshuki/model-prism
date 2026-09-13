@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "node:crypto";
-import { requireAdminToken } from "@/lib/api-auth";
+import { requireAdminToken, runOwner } from "@/lib/api-auth";
 import { listRunTelemetry, saveRunTelemetry } from "@/lib/db";
 import {
   aggregateModelValue,
@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
   if (unauthorized) return unauthorized;
 
   try {
-    const runs = parseTelemetryRows(await listRunTelemetry());
+    const runs = parseTelemetryRows(await listRunTelemetry(500, runOwner(req)));
     const leaderboard = aggregateModelValue(runs);
     return NextResponse.json({
       telemetryPath: "database:run_telemetry",

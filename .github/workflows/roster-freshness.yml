@@ -7,7 +7,10 @@ name: Roster freshness
 
 on:
   schedule:
-    - cron: "0 14 * * 1" # Mondays 14:00 UTC
+    - cron: "0 14 * * *" # Daily 14:00 UTC
+  push:
+    branches: [master]
+    paths: ["src/lib/model-catalog.*", "src/lib/model-freshness.ts", "scripts/check-roster-freshness.ts", ".github/workflows/roster-freshness.yml"]
   workflow_dispatch: {} # allow manual runs from the Actions tab
 
 permissions:
@@ -44,7 +47,7 @@ jobs:
           existing=$(gh issue list --label roster-freshness --state open --json number --jq '.[0].number')
           if [ -n "$existing" ]; then
             echo "Updating rolling issue #$existing"
-            gh issue comment "$existing" --body-file roster-freshness-report.md
+            gh issue edit "$existing" --body-file roster-freshness-report.md
           else
             echo "Opening new rolling issue"
             gh issue create \
@@ -58,3 +61,11 @@ jobs:
         run: |
           echo "::error::${{ steps.check.outputs.dead }} roster model(s) no longer exist in the OpenRouter catalog. See the issue / summary."
           exit 1
+
+      - name: Close resolved freshness issue
+        if: ${{ steps.check.outputs.findings == '0' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          existing=$(gh issue list --label roster-freshness --state open --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then gh issue close "$existing"; fi

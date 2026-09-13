@@ -1,102 +1,30 @@
 "use client";
-
-import { ModelInfo } from "@/lib/types";
-import { TIERS } from "@/lib/model-registry";
-import { cn } from "@/lib/utils";
+import { useState } from "react";
+import type { ModelInfo } from "@/lib/types";
+import type { ModelSelectionPreset } from "@/lib/run-presets";
 
 interface ModelPickerProps {
-  models: ModelInfo[];
-  selected: Set<string>;
-  tooSmall: Set<string>;
-  onToggle: (modelId: string) => void;
-  onSelectTier: (tier: ModelInfo["tier"]) => void;
-  onSelectAll: () => void;
-  onClearAll: () => void;
-  onSelectPreset: (preset: "frontier" | "diverse" | "all" | "free") => void;
+  models: ModelInfo[]; selected: Set<string>; tooSmall: Set<string>;
+  onToggle: (id: string) => void; onClearAll: () => void; onSelectPreset: (preset: ModelSelectionPreset) => void;
 }
-
-export function ModelPicker({
-  models,
-  selected,
-  tooSmall,
-  onToggle,
-  onSelectTier,
-  onSelectAll,
-  onClearAll,
-  onSelectPreset,
-}: ModelPickerProps) {
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-grey-60">
-          {selected.size} selected
-        </span>
-        <div className="flex gap-1.5">
-          <button onClick={onSelectAll} className="cta-text px-2 py-0.5 text-grey-40 hover:text-green transition-colors duration-300">All</button>
-          <button onClick={onClearAll} className="cta-text px-2 py-0.5 text-grey-40 hover:text-green transition-colors duration-300">None</button>
-        </div>
-      </div>
-
-      {/* Presets */}
-      <div className="flex gap-1.5 flex-wrap">
-        {[
-          { key: "frontier" as const, label: "Frontier" },
-          { key: "diverse" as const, label: "Diverse" },
-          { key: "free" as const, label: "Free Only" },
-          { key: "all" as const, label: "All" },
-        ].map(({ key, label }) => (
-          <button key={key} onClick={() => onSelectPreset(key)}
-            className="cta-text px-3 py-1.5 border border-border text-grey-50 hover:border-green hover:text-green transition-colors duration-300">
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {/* Model list by tier */}
-      <div className="max-h-[280px] overflow-y-auto space-y-4 pr-1">
-        {TIERS.map(({ key, label }) => {
-          const tierModels = models.filter((m) => m.tier === key);
-          if (tierModels.length === 0) return null;
-          const availableInTier = tierModels.filter((m) => !tooSmall.has(m.id));
-          const allSelected = availableInTier.length > 0 && availableInTier.every((m) => selected.has(m.id));
-
-          return (
-            <div key={key} className="space-y-1.5">
-              <button onClick={() => onSelectTier(key)}
-                className={cn(
-                  "overline transition-colors duration-300",
-                  allSelected ? "text-green" : "text-grey-30 hover:text-grey-60"
-                )}>
-                {label} ({availableInTier.length})
-              </button>
-              <div className="grid grid-cols-2 gap-1.5">
-                {tierModels.map((model) => {
-                  const disabled = tooSmall.has(model.id);
-                  const isSelected = selected.has(model.id);
-                  return (
-                    <button key={model.id} onClick={() => !disabled && onToggle(model.id)} disabled={disabled}
-                      title={disabled ? `Context too small (${model.contextLength.toLocaleString()})` : `${model.name} — ${model.family}`}
-                      className={cn(
-                        "text-left text-xs px-3 py-2 border transition-all duration-300",
-                        disabled
-                          ? "border-grey-5 bg-grey-5 text-grey-20 cursor-not-allowed"
-                          : isSelected
-                            ? "border-green bg-green-light text-green"
-                            : "border-border bg-white text-grey-50 hover:border-green/40 hover:text-grey-60"
-                      )}>
-                      <span className="block truncate font-medium">{model.name}</span>
-                      <div className="flex justify-between text-[9px] text-grey-30 mt-0.5">
-                        <span>{model.family}</span>
-                        <span>{model.inputCostPer1k === 0 && model.outputCostPer1k === 0 ? "free" : `$${model.inputCostPer1k.toFixed(4)}`}</span>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+export function ModelPicker({ models, selected, tooSmall, onToggle, onClearAll, onSelectPreset }: ModelPickerProps) {
+  const [search, setSearch] = useState("");
+  const [showAll, setShowAll] = useState(false);
+  const matches = models.filter((model) => `${model.name} ${model.id} ${model.family}`.toLowerCase().includes(search.toLowerCase()));
+  const visible = showAll || search ? matches : matches.filter((model) => selected.has(model.id));
+  return <div className="space-y-3">
+    <div className="flex flex-wrap gap-2">{([ ["diverse", "Balanced · 5"], ["cheap", "Economy · 5"], ["frontier", "Advanced · 5"], ["free", "Free"] ] as const).map(([preset, label]) => <button key={preset} onClick={() => onSelectPreset(preset)} className="min-h-11 border border-border px-3 py-2 text-sm text-green hover:bg-green-light">{label}</button>)}</div>
+    <label className="block text-sm">Find a model<input value={search} onChange={(event) => setSearch(event.target.value)} type="search" placeholder="Search name or provider" className="mt-1 w-full border border-border px-3 py-2.5" /></label>
+    <div className="flex justify-between gap-2 text-sm"><span>{selected.size} selected · {new Set(models.filter((model) => selected.has(model.id)).map((model) => model.family)).size} families</span><button className="text-green underline" onClick={onClearAll}>Clear</button></div>
+    <div className="max-h-80 overflow-y-auto space-y-2">
+      {visible.map((model) => <button key={model.id} disabled={tooSmall.has(model.id)} aria-pressed={selected.has(model.id)} onClick={() => onToggle(model.id)} className={`w-full min-w-0 text-left p-3 border text-sm disabled:opacity-50 ${selected.has(model.id) ? "border-green bg-green-light" : "border-border bg-white"}`}>
+        <span className="flex justify-between gap-3"><span className="font-medium break-words">{model.name}</span><span aria-hidden="true">{selected.has(model.id) ? "✓" : "+"}</span></span>
+        <span className="block text-xs text-grey-50 mt-1">{model.family} · {(model.contextLength / 1000).toLocaleString()}k context · ${Number((model.inputCostPer1k * 1000).toFixed(3))} in / ${Number((model.outputCostPer1k * 1000).toFixed(3))} out per 1M tokens</span>
+        {tooSmall.has(model.id) && <span className="block text-xs mt-1">Input plus output budget exceeds context</span>}
+      </button>)}
+      {!visible.length && <p className="text-sm text-grey-50 p-2">{search ? "No matching text models." : "Choose a roster or browse the catalog."}</p>}
     </div>
-  );
+    <button onClick={() => setShowAll(!showAll)} aria-expanded={showAll} className="text-sm text-green underline min-h-11">{showAll ? "Show selected models" : `Browse ${models.length} text models`}</button>
+    <p className="text-xs text-grey-50">The free catalog currently may have fewer than two independent families. Add a paid reviewer to enable synthesis.</p>
+  </div>;
 }

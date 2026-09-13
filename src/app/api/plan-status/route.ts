@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdminToken } from "@/lib/api-auth";
-import { getPlanStatus, savePlanStatus } from "@/lib/db";
+import { requireAdminToken, runOwner } from "@/lib/api-auth";
+import { getRun, getPlanStatus, savePlanStatus } from "@/lib/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,6 +13,7 @@ export async function GET(req: NextRequest) {
   if (!runId) return NextResponse.json({ error: "Missing runId" }, { status: 400 });
 
   try {
+    if (!await getRun(runId, runOwner(req))) return NextResponse.json({ error: "Run not found" }, { status: 404 });
     const row = await getPlanStatus(runId);
     return NextResponse.json({ status: row?.status ?? "council-reviewed", approvedAt: row?.approved_at ?? null });
   } catch (error) {
@@ -28,6 +29,7 @@ export async function POST(req: NextRequest) {
   if (!runId || !status) return NextResponse.json({ error: "Missing runId or status" }, { status: 400 });
 
   try {
+    if (!await getRun(runId, runOwner(req))) return NextResponse.json({ error: "Run not found" }, { status: 404 });
     await savePlanStatus(runId, status, approvedAt ?? null);
     return NextResponse.json({ ok: true });
   } catch (error) {

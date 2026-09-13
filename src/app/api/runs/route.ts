@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createRun, listRuns } from "@/lib/db";
-import { requireAdminToken } from "@/lib/api-auth";
+import { requireAdminToken, runOwner } from "@/lib/api-auth";
 
 export async function POST(req: NextRequest) {
   const unauthorized = requireAdminToken(req);
@@ -20,6 +20,6 @@ export async function GET(req: NextRequest) {
   const unauthorized = requireAdminToken(req);
   if (unauthorized) return unauthorized;
 
-  const runs = await listRuns();
-  return NextResponse.json({ runs });
+  const runs = await listRuns(runOwner(req));
+  return NextResponse.json({ runs }, { headers: { "Cache-Control": "private, no-store" } });
 }

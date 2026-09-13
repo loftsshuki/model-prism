@@ -50,7 +50,7 @@ describe("wrapUntrusted (B12)", () => {
 describe("runAgenticMember — bounded loop (mocked fetch)", () => {
   it("returns the model's summary when no tool call is requested", async () => {
     const fetchImpl = (async () => new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "no ground-truth errors found" } }] }), { status: 200 })) as typeof fetch;
-    const out = await runAgenticMember({ openrouterKey: "k", modelId: "m", planContent: "p", repoRoot: ".", fetchImpl });
+    const out = await runAgenticMember({ openrouterKey: "k", modelId: "minimax/minimax-m3", planContent: "p", repoRoot: ".", fetchImpl });
     expect(out).toBe("no ground-truth errors found");
   });
 
@@ -60,7 +60,7 @@ describe("runAgenticMember — bounded loop (mocked fetch)", () => {
       calls++;
       return new Response(JSON.stringify({ choices: [{ message: { content: "", tool_calls: [{ id: `t${calls}`, function: { name: "repo_grep", arguments: JSON.stringify({ pattern: "zzz_nomatch_zzz" }) } }] } }] }), { status: 200 });
     }) as typeof fetch;
-    const out = await runAgenticMember({ openrouterKey: "k", modelId: "m", planContent: "p", repoRoot: ".", fetchImpl, caps: { ...DEFAULT_AGENTIC_CAPS, maxToolCalls: 3 } });
+    const out = await runAgenticMember({ openrouterKey: "k", modelId: "minimax/minimax-m3", planContent: "p", repoRoot: ".", fetchImpl, caps: { ...DEFAULT_AGENTIC_CAPS, maxToolCalls: 3 } });
     // It loops but is bounded by maxToolCalls+1 turns → returns null, never infinite.
     expect(out).toBeNull();
     expect(calls).toBeLessThanOrEqual(DEFAULT_AGENTIC_CAPS.maxToolCalls + 2);
@@ -68,7 +68,7 @@ describe("runAgenticMember — bounded loop (mocked fetch)", () => {
 
   it("returns null (abstain) on a non-retryable HTTP error", async () => {
     const fetchImpl = (async () => new Response("auth", { status: 401 })) as typeof fetch;
-    const out = await runAgenticMember({ openrouterKey: "k", modelId: "m", planContent: "p", repoRoot: ".", fetchImpl });
+    const out = await runAgenticMember({ openrouterKey: "k", modelId: "minimax/minimax-m3", planContent: "p", repoRoot: ".", fetchImpl });
     expect(out).toBeNull();
   });
 });

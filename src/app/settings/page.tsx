@@ -1,16 +1,18 @@
 "use client";
+import Link from "next/link";
+import { prepareCloudAccess } from "@/lib/client-api";
 
 import { useState, useEffect, useCallback } from "react";
 import { DEFAULT_TEMPLATES, PromptTemplate } from "@/lib/prompts";
 import { DEFAULT_RUN_PRESETS, ModelSelectionPreset } from "@/lib/run-presets";
 import { BUILT_IN_PROJECT_PROFILES, createProjectProfile, getCustomProjectProfiles, ProjectProfile, saveCustomProjectProfiles } from "@/lib/project-profiles";
-import { validatePat, getRateLimitInfo } from "@/lib/github";
+import { validatePat } from "@/lib/github";
 import { getCacheSize, getCacheEntryCount, clearAllCache } from "@/lib/context-cache";
 import { PatValidationResult } from "@/lib/types";
 
 function getStoredKey(key: string): string {
   if (typeof window === "undefined") return "";
-  return localStorage.getItem(key) || "";
+  return sessionStorage.getItem(key) || localStorage.getItem(key) || "";
 }
 
 function getCustomTemplates(): PromptTemplate[] {
@@ -24,7 +26,6 @@ function getCustomTemplates(): PromptTemplate[] {
 
 export default function SettingsPage() {
   const [openrouterKey, setOpenrouterKey] = useState("");
-  const [anthropicKey, setAnthropicKey] = useState("");
   const [adminToken, setAdminToken] = useState("");
   const [synthesisModel, setSynthesisModel] = useState("sonnet");
   const [customTemplates, setCustomTemplates] = useState<PromptTemplate[]>([]);
@@ -39,6 +40,7 @@ export default function SettingsPage() {
   const [profileMaxCost, setProfileMaxCost] = useState(1.5);
   const [profileContextName, setProfileContextName] = useState("");
   const [saved, setSaved] = useState(false);
+  const [rememberKeys, setRememberKeys] = useState(false);
 
   // GitHub PAT state
   const [githubPat, setGithubPat] = useState("");
@@ -51,8 +53,9 @@ export default function SettingsPage() {
   const [cacheClearing, setCacheClearing] = useState(false);
 
   useEffect(() => {
+    queueMicrotask(() => {
+    setRememberKeys(Boolean(localStorage.getItem("openrouter-api-key")));
     setOpenrouterKey(getStoredKey("openrouter-api-key"));
-    setAnthropicKey(getStoredKey("anthropic-api-key"));
     setAdminToken(getStoredKey("model-prism-admin-token"));
     setSynthesisModel(getStoredKey("synthesis-model") || "sonnet");
     setGithubPat(getStoredKey("github-pat"));
@@ -64,14 +67,16 @@ export default function SettingsPage() {
       setCacheSize(await getCacheSize());
       setCacheEntries(await getCacheEntryCount());
     })();
+    });
   }, []);
 
-  const saveKeys = () => {
-    localStorage.setItem("openrouter-api-key", openrouterKey);
-    localStorage.setItem("anthropic-api-key", anthropicKey);
+  const saveKeys = async () => {
+    sessionStorage.setItem("openrouter-api-key", openrouterKey);
+    if (rememberKeys) localStorage.setItem("openrouter-api-key", openrouterKey); else localStorage.removeItem("openrouter-api-key");
     localStorage.setItem("model-prism-admin-token", adminToken);
     localStorage.setItem("synthesis-model", synthesisModel);
     localStorage.setItem("github-pat", githubPat);
+    await prepareCloudAccess(openrouterKey);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -143,81 +148,72 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100">
-      <header className="border-b border-neutral-800 px-6 py-4">
+    <div className="min-h-screen bg-cream text-ink">
+      <header className="border-b border-border px-6 py-4">
         <div className="max-w-2xl mx-auto flex items-center gap-3">
-          <a href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
+          <Link href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-green to-green-hover flex items-center justify-center">
               <span className="text-sm font-bold">P</span>
             </div>
             <h1 className="text-lg font-semibold">Model Prism</h1>
-          </a>
-          <span className="text-neutral-600">/</span>
-          <span className="text-sm text-neutral-400">Settings</span>
+          </Link>
+          <span className="text-grey-40">/</span>
+          <span className="text-sm text-grey-50">Settings</span>
         </div>
       </header>
 
       <div className="max-w-2xl mx-auto p-6 space-y-8">
         {/* API Keys */}
         <section className="space-y-4">
-          <h2 className="text-sm font-semibold text-neutral-300">API Keys</h2>
-          <p className="text-xs text-neutral-500">
-            Keys are stored in your browser only. Never sent to our servers.
+          <h2 className="text-sm font-semibold text-grey-60">API Keys</h2>
+          <p className="text-xs text-grey-50">
+            OpenRouter handles council, synthesis, and brief enhancement. Saved reviews exclude API keys. The admin token is sent to the protected save/history APIs.
           </p>
 
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={rememberKeys} onChange={(event) => setRememberKeys(event.target.checked)} />Remember OpenRouter key on this device (unencrypted)</label>
           <div className="space-y-3">
             <div>
-              <label className="block text-xs text-neutral-400 mb-1">OpenRouter API Key</label>
-              <input
+              <label htmlFor="setting-openrouter-api-key" className="block text-xs text-grey-50 mb-1">OpenRouter API Key</label>
+              <input id="setting-openrouter-api-key"
                 type="password"
                 value={openrouterKey}
                 onChange={(e) => setOpenrouterKey(e.target.value)}
                 placeholder="sk-or-..."
-                className="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600 focus:outline-none focus:border-violet-500"
+                className="w-full bg-white border border-border rounded-lg px-3 py-2 text-sm text-ink placeholder:text-grey-40 focus:outline-none focus:border-green"
               />
             </div>
             <div>
-              <label className="block text-xs text-neutral-400 mb-1">Anthropic API Key (for synthesis + brief enhancement)</label>
-              <input
-                type="password"
-                value={anthropicKey}
-                onChange={(e) => setAnthropicKey(e.target.value)}
-                placeholder="sk-ant-..."
-                className="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600 focus:outline-none focus:border-violet-500"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-neutral-400 mb-1">Admin Token (optional, for protected history/save APIs)</label>
-              <input
+              <label htmlFor="setting-admin-token-optional-for-protected-history-save-apis-" className="block text-xs text-grey-50 mb-1">Admin Token (optional, for protected history/save APIs)</label>
+              <input id="setting-admin-token-optional-for-protected-history-save-apis-"
                 type="password"
                 value={adminToken}
                 onChange={(e) => setAdminToken(e.target.value)}
                 placeholder="Only needed when MODEL_PRISM_ADMIN_TOKEN is set"
-                className="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600 focus:outline-none focus:border-violet-500"
+                className="w-full bg-white border border-border rounded-lg px-3 py-2 text-sm text-ink placeholder:text-grey-40 focus:outline-none focus:border-green"
               />
             </div>
             <div>
-              <label className="block text-xs text-neutral-400 mb-1">Default Synthesis Model</label>
+              <label className="block text-xs text-grey-50 mb-1">Default Synthesis Model</label>
               <div className="flex gap-2">
                 <button
                   onClick={() => setSynthesisModel("sonnet")}
                   className={`text-xs px-4 py-2 rounded-lg border transition-colors ${
                     synthesisModel === "sonnet"
-                      ? "border-violet-500 bg-violet-500/10 text-violet-200"
-                      : "border-neutral-800 bg-neutral-900 text-neutral-500 hover:border-neutral-700"
+                      ? "border-green bg-green-light text-green"
+                      : "border-border bg-white text-grey-50 hover:border-border"
                   }`}
                 >
-                  Sonnet (fast, ~$0.02)
+                  Sonnet 5
                 </button>
                 <button
                   onClick={() => setSynthesisModel("opus")}
                   className={`text-xs px-4 py-2 rounded-lg border transition-colors ${
                     synthesisModel === "opus"
-                      ? "border-violet-500 bg-violet-500/10 text-violet-200"
-                      : "border-neutral-800 bg-neutral-900 text-neutral-500 hover:border-neutral-700"
+                      ? "border-green bg-green-light text-green"
+                      : "border-border bg-white text-grey-50 hover:border-border"
                   }`}
                 >
-                  Opus (deep, ~$0.10)
+                  Opus 5
                 </button>
               </div>
             </div>
@@ -226,25 +222,25 @@ export default function SettingsPage() {
 
         {/* GitHub Integration */}
         <section className="space-y-4">
-          <h2 className="text-sm font-semibold text-neutral-300">GitHub Integration</h2>
-          <p className="text-xs text-neutral-500">
+          <h2 className="text-sm font-semibold text-grey-60">GitHub Integration</h2>
+          <p className="text-xs text-grey-50">
             Connect a GitHub Personal Access Token to give models read-only access to your codebase during analysis.
           </p>
 
           <div>
-            <label className="block text-xs text-neutral-400 mb-1">GitHub Personal Access Token</label>
-            <input
+            <label htmlFor="setting-github-personal-access-token" className="block text-xs text-grey-50 mb-1">GitHub Personal Access Token</label>
+            <input id="setting-github-personal-access-token"
               type="password"
               value={githubPat}
               onChange={(e) => setGithubPat(e.target.value)}
               placeholder="ghp_... or github_pat_..."
-              className="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600 focus:outline-none focus:border-violet-500"
+              className="w-full bg-white border border-border rounded-lg px-3 py-2 text-sm text-ink placeholder:text-grey-40 focus:outline-none focus:border-green"
             />
           </div>
 
-          <div className="text-xs text-neutral-600 space-y-1">
-            <p><strong className="text-neutral-500">Classic token:</strong> select <code className="text-neutral-400">repo</code> scope</p>
-            <p><strong className="text-neutral-500">Fine-grained token:</strong> select <code className="text-neutral-400">Contents: Read-only</code> for All or Selected repositories</p>
+          <div className="text-xs text-grey-40 space-y-1">
+            <p><strong className="text-grey-50">Classic token:</strong> select <code className="text-grey-50">repo</code> scope</p>
+            <p><strong className="text-grey-50">Fine-grained token:</strong> select <code className="text-grey-50">Contents: Read-only</code> for All or Selected repositories</p>
           </div>
 
           <div className="flex items-center gap-3">
@@ -253,8 +249,8 @@ export default function SettingsPage() {
               disabled={!githubPat.trim() || patValidating}
               className={`text-xs px-4 py-2 rounded-lg border transition-colors ${
                 patValidating
-                  ? "border-neutral-800 bg-neutral-900 text-neutral-600 cursor-wait"
-                  : "border-neutral-700 bg-neutral-900 text-neutral-400 hover:border-violet-500 hover:text-violet-300"
+                  ? "border-border bg-white text-grey-40 cursor-wait"
+                  : "border-border bg-white text-grey-50 hover:border-green hover:text-green"
               } disabled:opacity-40 disabled:cursor-not-allowed`}
             >
               {patValidating ? "Validating..." : "Validate Token"}
@@ -266,7 +262,7 @@ export default function SettingsPage() {
                   <span>
                     Connected as <strong>{patValidation.username}</strong>
                     {patValidation.scopes && patValidation.scopes.length > 0 && (
-                      <span className="text-neutral-500 ml-1">({patValidation.scopes.join(", ")})</span>
+                      <span className="text-grey-50 ml-1">({patValidation.scopes.join(", ")})</span>
                     )}
                   </span>
                 ) : (
@@ -283,15 +279,15 @@ export default function SettingsPage() {
           </div>
 
           {/* Cache management */}
-          <div className="border-t border-neutral-800 pt-4 mt-4 space-y-2">
+          <div className="border-t border-border pt-4 mt-4 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-neutral-500">
+              <span className="text-xs text-grey-50">
                 Context cache: {cacheEntries} entries (~{(cacheSize / 1024).toFixed(0)}KB)
               </span>
               <button
                 onClick={handleClearCache}
                 disabled={cacheClearing || cacheEntries === 0}
-                className="text-xs text-neutral-600 hover:text-red-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                className="text-xs text-grey-40 hover:text-red-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {cacheClearing ? "Clearing..." : "Clear Cache"}
               </button>
@@ -302,25 +298,25 @@ export default function SettingsPage() {
         {/* Save button */}
         <button
           onClick={saveKeys}
-          className="px-4 py-2 rounded-lg bg-violet-600 text-sm font-medium text-white hover:bg-violet-500 transition-colors"
+          className="px-4 py-2 rounded-lg bg-green text-sm font-medium text-white hover:bg-violet-500 transition-colors"
         >
           {saved ? "Saved!" : "Save All Settings"}
         </button>
 
         {/* Project Profiles */}
         <section className="space-y-4">
-          <h2 className="text-sm font-semibold text-neutral-300">Project Profiles</h2>
-          <p className="text-xs text-neutral-500">
+          <h2 className="text-sm font-semibold text-grey-60">Project Profiles</h2>
+          <p className="text-xs text-grey-50">
             Profiles set the default run preset, model mix, synthesis model, budget, and context-pack hint for a project.
           </p>
 
           <div className="space-y-2">
             {[...BUILT_IN_PROJECT_PROFILES, ...customProfiles].map((profile) => (
-              <div key={profile.id} className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 flex items-start justify-between gap-3">
+              <div key={profile.id} className="rounded-lg border border-border bg-white p-3 flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-sm font-medium text-neutral-200">{profile.name}</p>
-                  <p className="text-xs text-neutral-500 mt-1">{profile.description}</p>
-                  <p className="text-[11px] text-neutral-600 mt-2">
+                  <p className="text-sm font-medium text-ink">{profile.name}</p>
+                  <p className="text-xs text-grey-50 mt-1">{profile.description}</p>
+                  <p className="text-[11px] text-grey-40 mt-2">
                     Preset: {profile.defaultRunPresetId} · Models: {profile.defaultModelPreset} · Synthesis: {profile.defaultSynthesisModel} · Budget: ${profile.defaultMaxCost.toFixed(2)}
                   </p>
                 </div>
@@ -333,30 +329,30 @@ export default function SettingsPage() {
             ))}
           </div>
 
-          <div className="rounded-lg border border-dashed border-neutral-700 p-4 space-y-3">
+          <div className="rounded-lg border border-dashed border-border p-4 space-y-3">
             <input
               value={profileName}
               onChange={(e) => setProfileName(e.target.value)}
               placeholder="Project profile name"
-              className="w-full bg-neutral-900 border border-neutral-800 rounded px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600 focus:outline-none focus:border-violet-500"
+              className="w-full bg-white border border-border rounded px-3 py-2 text-sm text-ink placeholder:text-grey-40 focus:outline-none focus:border-green"
             />
             <input
               value={profileDescription}
               onChange={(e) => setProfileDescription(e.target.value)}
               placeholder="Short description"
-              className="w-full bg-neutral-900 border border-neutral-800 rounded px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600 focus:outline-none focus:border-violet-500"
+              className="w-full bg-white border border-border rounded px-3 py-2 text-sm text-ink placeholder:text-grey-40 focus:outline-none focus:border-green"
             />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <select value={profileRunPreset} onChange={(e) => setProfileRunPreset(e.target.value)} className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2 text-sm text-neutral-200 focus:outline-none focus:border-violet-500">
+              <select value={profileRunPreset} onChange={(e) => setProfileRunPreset(e.target.value)} className="bg-white border border-border rounded px-3 py-2 text-sm text-ink focus:outline-none focus:border-green">
                 {DEFAULT_RUN_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
               </select>
-              <select value={profileModelPreset} onChange={(e) => setProfileModelPreset(e.target.value as ModelSelectionPreset)} className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2 text-sm text-neutral-200 focus:outline-none focus:border-violet-500">
+              <select value={profileModelPreset} onChange={(e) => setProfileModelPreset(e.target.value as ModelSelectionPreset)} className="bg-white border border-border rounded px-3 py-2 text-sm text-ink focus:outline-none focus:border-green">
                 <option value="frontier">Frontier</option>
                 <option value="diverse">Diverse</option>
                 <option value="all">All</option>
                 <option value="free">Free</option>
               </select>
-              <select value={profileSynthesisModel} onChange={(e) => setProfileSynthesisModel(e.target.value as "sonnet" | "opus")} className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2 text-sm text-neutral-200 focus:outline-none focus:border-violet-500">
+              <select value={profileSynthesisModel} onChange={(e) => setProfileSynthesisModel(e.target.value as "sonnet" | "opus")} className="bg-white border border-border rounded px-3 py-2 text-sm text-ink focus:outline-none focus:border-green">
                 <option value="sonnet">Sonnet synthesis</option>
                 <option value="opus">Opus synthesis</option>
               </select>
@@ -366,19 +362,19 @@ export default function SettingsPage() {
                 step="0.25"
                 value={profileMaxCost}
                 onChange={(e) => setProfileMaxCost(Number(e.target.value || "0"))}
-                className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2 text-sm text-neutral-200 focus:outline-none focus:border-violet-500"
+                className="bg-white border border-border rounded px-3 py-2 text-sm text-ink focus:outline-none focus:border-green"
               />
             </div>
             <input
               value={profileContextName}
               onChange={(e) => setProfileContextName(e.target.value)}
               placeholder="Optional context pack name hint"
-              className="w-full bg-neutral-900 border border-neutral-800 rounded px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600 focus:outline-none focus:border-violet-500"
+              className="w-full bg-white border border-border rounded px-3 py-2 text-sm text-ink placeholder:text-grey-40 focus:outline-none focus:border-green"
             />
             <button
               onClick={addProfile}
               disabled={!profileName.trim()}
-              className="px-4 py-2 rounded-lg bg-neutral-800 text-sm text-neutral-300 hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="px-4 py-2 rounded-lg bg-grey-5 text-sm text-grey-60 hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               Add Profile
             </button>
@@ -387,15 +383,15 @@ export default function SettingsPage() {
 
         {/* Default Prompt Templates */}
         <section className="space-y-4">
-          <h2 className="text-sm font-semibold text-neutral-300">Built-in Templates</h2>
+          <h2 className="text-sm font-semibold text-grey-60">Built-in Templates</h2>
           <div className="space-y-2">
             {DEFAULT_TEMPLATES.map((t) => (
               <div
                 key={t.id}
-                className="rounded-lg border border-neutral-800 bg-neutral-900 p-3"
+                className="rounded-lg border border-border bg-white p-3"
               >
-                <p className="text-sm font-medium text-neutral-200">{t.name}</p>
-                <p className="text-xs text-neutral-500 mt-1 line-clamp-2">{t.prompt}</p>
+                <p className="text-sm font-medium text-ink">{t.name}</p>
+                <p className="text-xs text-grey-50 mt-1 line-clamp-2">{t.prompt}</p>
               </div>
             ))}
           </div>
@@ -403,18 +399,18 @@ export default function SettingsPage() {
 
         {/* Custom Templates */}
         <section className="space-y-4">
-          <h2 className="text-sm font-semibold text-neutral-300">Custom Templates</h2>
+          <h2 className="text-sm font-semibold text-grey-60">Custom Templates</h2>
 
           {customTemplates.length > 0 && (
             <div className="space-y-2">
               {customTemplates.map((t) => (
                 <div
                   key={t.id}
-                  className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 flex items-start justify-between"
+                  className="rounded-lg border border-border bg-white p-3 flex items-start justify-between"
                 >
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-neutral-200">{t.name}</p>
-                    <p className="text-xs text-neutral-500 mt-1 line-clamp-2">{t.prompt}</p>
+                    <p className="text-sm font-medium text-ink">{t.name}</p>
+                    <p className="text-xs text-grey-50 mt-1 line-clamp-2">{t.prompt}</p>
                   </div>
                   <button
                     onClick={() => removeTemplate(t.id)}
@@ -427,24 +423,24 @@ export default function SettingsPage() {
             </div>
           )}
 
-          <div className="rounded-lg border border-dashed border-neutral-700 p-4 space-y-3">
+          <div className="rounded-lg border border-dashed border-border p-4 space-y-3">
             <input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               placeholder="Template name"
-              className="w-full bg-neutral-900 border border-neutral-800 rounded px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600 focus:outline-none focus:border-violet-500"
+              className="w-full bg-white border border-border rounded px-3 py-2 text-sm text-ink placeholder:text-grey-40 focus:outline-none focus:border-green"
             />
             <textarea
               value={newPrompt}
               onChange={(e) => setNewPrompt(e.target.value)}
               placeholder="Prompt text..."
               rows={3}
-              className="w-full bg-neutral-900 border border-neutral-800 rounded px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600 focus:outline-none focus:border-violet-500 resize-y"
+              className="w-full bg-white border border-border rounded px-3 py-2 text-sm text-ink placeholder:text-grey-40 focus:outline-none focus:border-green resize-y"
             />
             <button
               onClick={addTemplate}
               disabled={!newName.trim() || !newPrompt.trim()}
-              className="px-4 py-2 rounded-lg bg-neutral-800 text-sm text-neutral-300 hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="px-4 py-2 rounded-lg bg-grey-5 text-sm text-grey-60 hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               Add Template
             </button>

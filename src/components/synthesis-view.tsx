@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { SynthesisResult } from "@/lib/types";
 import { analyzeReviewQuality, buildActionChecklistMarkdown, extractActionItems } from "@/lib/review-analysis";
 import { ThemeHeatmap } from "./theme-heatmap";
+import { Markdown } from "./markdown";
 
 interface SynthesisViewProps {
   synthesis: SynthesisResult;
@@ -16,7 +17,7 @@ interface SynthesisViewProps {
 export function SynthesisView({
   synthesis,
   title = "Master Synthesis",
-  eyebrow = "All models distilled",
+  eyebrow = "Completed reviewers distilled",
   onSecondPass,
   secondPassLoading = false,
 }: SynthesisViewProps) {
@@ -37,15 +38,15 @@ export function SynthesisView({
         <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-5">
           <div>
             <div className="flex items-center gap-3">
-              <div className="text-4xl font-display font-bold text-green">{quality.score}</div>
+              <div className="text-4xl font-display font-bold text-green">{quality.score ?? "—"}</div>
               <div>
-                <p className="overline text-grey-30">Review Quality</p>
+                <p className="overline text-grey-40">Evidence coverage</p>
                 <p className="text-sm text-grey-50">Risk: <span className="text-ink font-medium">{quality.risk}</span> · Actionability: <span className="text-ink font-medium">{quality.actionability}</span></p>
               </div>
             </div>
             <div className="mt-4 grid grid-cols-2 lg:grid-cols-4 gap-2 text-[11px] text-grey-40">
               <span className="bg-grey-5 px-2 py-1">Coverage {quality.coverage}</span>
-              <span className="bg-grey-5 px-2 py-1">Confidence {quality.confidence}</span>
+              <span className="bg-grey-5 px-2 py-1">Accuracy not scored</span>
               <span className="bg-grey-5 px-2 py-1">Disagreement {quality.disagreementLevel}</span>
               <span className="bg-grey-5 px-2 py-1">Missing context {quality.missingContextRisk}</span>
             </div>
@@ -77,6 +78,15 @@ export function SynthesisView({
           </div>
         )}
       </div>
+
+      {synthesis.findings && synthesis.findings.length > 0 && <section className="border border-border bg-white p-4 space-y-4">
+        <h2 className="font-display text-xl">Findings and evidence</h2>
+        {synthesis.findings.map((finding) => <details key={finding.id} className="border-t border-border pt-3">
+          <summary className="cursor-pointer text-sm font-medium">{finding.severity.toUpperCase()} · {finding.title}<span className="block mt-1 text-xs font-normal text-grey-50">{finding.evidenceVerified ? "Quotes matched supplied sources" : "Evidence needs verification"}</span></summary>
+          <p className="mt-3 text-sm">{finding.recommendation}</p>
+          {finding.evidence.map((evidence, index) => <blockquote key={index} className="border-l-2 border-green pl-3 mt-3 text-sm"><p className="break-words whitespace-pre-wrap">{evidence.quote}</p><cite className="block mt-1 text-xs break-all text-grey-50">{evidence.source}</cite></blockquote>)}
+        </details>)}
+      </section>}
 
       {actionItems.length > 0 && (
         <div className="border border-border bg-white p-5 lg:p-6">
@@ -116,18 +126,7 @@ export function SynthesisView({
               [&_ul]:space-y-1.5 [&_li]:text-sm
               [&_p]:text-sm [&_p]:mb-3
               [&_ol]:space-y-1.5 [&_ol>li]:text-sm"
-            dangerouslySetInnerHTML={{
-              __html: synthesis.masterDocument
-                .replace(/^### (.*$)/gm, '<h3>$1</h3>')
-                .replace(/^## (.*$)/gm, '<h2>$1</h2>')
-                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                .replace(/^\- (.*$)/gm, '<li>$1</li>')
-                .replace(/(<li>.*<\/li>\n?)+/g, (match) => `<ul>${match}</ul>`)
-                .replace(/^\d+\. (.*$)/gm, '<li>$1</li>')
-                .replace(/\n\n/g, '</p><p>')
-                .replace(/^(?!<[hulo])/gm, (line) => line ? `<p>${line}` : '')
-            }}
-          />
+          ><Markdown>{synthesis.masterDocument}</Markdown></div>
         </div>
       )}
 

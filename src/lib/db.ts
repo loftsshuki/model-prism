@@ -1,4 +1,7 @@
 import { neon } from "@neondatabase/serverless";
+import { createHash } from "node:crypto";
+import { checkpointCost, sameReviewInput, type RunCheckpoint } from "./run-checkpoint";
+import { buildRunTelemetry } from "./telemetry";
 
 function getClient() {
   const url = process.env.DATABASE_URL;
@@ -9,9 +12,16 @@ function getClient() {
 }
 
 let initialized = false;
+let initializing: Promise<void> | null = null;
 
 export async function initDb() {
   if (initialized) return;
+  if (initializing) return initializing;
+  initializing = initializeDb();
+  try { await initializing; } finally { initializing = null; }
+}
+
+async function initializeDb() {
   const sql = getClient();
 
   await sql`
@@ -33,6 +43,9 @@ export async function initDb() {
     EXCEPTION WHEN others THEN NULL;
     END $$;
   `;
+  await sql`ALTER TABLE runs ADD COLUMN IF NOT EXISTS snapshot JSONB`;
+  await sql`ALTER TABLE runs ADD COLUMN IF NOT EXISTS snapshot_revision INTEGER DEFAULT 0`;
+  await sql`ALTER TABLE runs ADD COLUMN IF NOT EXISTS owner_key TEXT`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS responses (
@@ -68,6 +81,10 @@ export async function initDb() {
       created_at TIMESTAMP DEFAULT NOW()
     )
   `;
+  await sql`ALTER TABLE responses ADD COLUMN IF NOT EXISTS save_key TEXT`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS response_save_key ON responses (run_id, save_key)`;
+  await sql`ALTER TABLE syntheses ADD COLUMN IF NOT EXISTS save_key TEXT`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS synthesis_save_key ON syntheses (run_id, save_key)`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS plan_statuses (
@@ -127,9 +144,11 @@ export async function saveResponse(
 ) {
   await initDb();
   const sql = getClient();
+  const saveKey = createHash("sha256").update(JSON.stringify([model, response, error, timeMs, inputTokens, outputTokens, cost])).digest("hex");
   await sql`
-    INSERT INTO responses (run_id, model, model_name, base_architecture, response, error, time_ms, input_tokens, output_tokens, cost)
-    VALUES (${runId}, ${model}, ${modelName}, ${family}, ${response}, ${error}, ${timeMs}, ${inputTokens}, ${outputTokens}, ${cost})
+    INSERT INTO responses (run_id, model, model_name, base_architecture, response, error, time_ms, input_tokens, output_tokens, cost, save_key)
+    VALUES (${runId}, ${model}, ${modelName}, ${family}, ${response}, ${error}, ${timeMs}, ${inputTokens}, ${outputTokens}, ${cost}, ${saveKey})
+    ON CONFLICT (run_id, save_key) DO NOTHING
   `;
 }
 
@@ -140,23 +159,50 @@ export async function saveSynthesis(
 ) {
   await initDb();
   const sql = getClient();
+  const saveKey = createHash("sha256").update(modelUsed + result).digest("hex");
   await sql`
-    INSERT INTO syntheses (run_id, result, model_used)
-    VALUES (${runId}, ${result}, ${modelUsed})
+    INSERT INTO syntheses (run_id, result, model_used, save_key)
+    VALUES (${runId}, ${result}, ${modelUsed}, ${saveKey})
+    ON CONFLICT (run_id, save_key) DO NOTHING
   `;
 }
 
 export async function updateRunCost(runId: string, totalCost: number) {
   await initDb();
   const sql = getClient();
-  await sql`UPDATE runs SET total_cost = ${totalCost} WHERE id = ${runId}`;
+  // Legacy callers send a response cost, not the accumulated run total.
+  // Recomputing is idempotent and prevents a late response replacing the total.
+  void totalCost;
+  await sql`UPDATE runs SET total_cost = COALESCE((SELECT SUM(cost) FROM responses WHERE run_id = ${runId}), 0)
+    + COALESCE((SELECT SUM(COALESCE((entry->>'cost')::double precision, 0)) FROM syntheses,
+      LATERAL jsonb_array_elements(COALESCE(result::jsonb->'usage', '[]'::jsonb)) entry WHERE run_id = ${runId}), 0)
+    WHERE id = ${runId} AND snapshot IS NULL`;
 }
 
-export async function getRun(id: string) {
+export async function saveRunCheckpoint(snapshot: RunCheckpoint, owner: string) {
+  await initDb();
+  const sql = getClient();
+  const existing = await sql`SELECT snapshot, snapshot_revision, owner_key FROM runs WHERE id = ${snapshot.id}`;
+  if (existing.length && existing[0].owner_key !== owner) throw new Error("RUN_CONFLICT");
+  const previous = existing[0]?.snapshot as RunCheckpoint | undefined;
+  if (previous && !sameReviewInput(previous, snapshot)) throw new Error("RUN_CONFLICT");
+  if (previous && previous.revision > snapshot.revision) throw new Error("RUN_CONFLICT");
+  await sql`INSERT INTO runs (id, content, prompt, models, context_metadata, total_cost, snapshot, snapshot_revision, created_at, owner_key)
+    VALUES (${snapshot.id}, ${snapshot.content}, ${snapshot.prompt}, ${JSON.stringify(snapshot.models.map((model) => model.id))}, ${snapshot.contextMetadata ?? null}, ${checkpointCost(snapshot)}, ${JSON.stringify(snapshot)}::jsonb, ${snapshot.revision}, ${snapshot.createdAt}, ${owner})
+    ON CONFLICT (id) DO UPDATE SET models = EXCLUDED.models, total_cost = EXCLUDED.total_cost,
+      snapshot = EXCLUDED.snapshot, snapshot_revision = EXCLUDED.snapshot_revision
+    WHERE runs.snapshot_revision < EXCLUDED.snapshot_revision
+      AND runs.owner_key = EXCLUDED.owner_key
+      AND runs.content = EXCLUDED.content AND runs.prompt = EXCLUDED.prompt
+      AND (runs.snapshot IS NULL OR (runs.snapshot->>'context' = EXCLUDED.snapshot->>'context'
+        AND runs.snapshot->>'reasoningEffort' = EXCLUDED.snapshot->>'reasoningEffort'))`;
+}
+
+export async function getRun(id: string, owner: string | null = null) {
   await initDb();
   const sql = getClient();
 
-  const runs = await sql`SELECT * FROM runs WHERE id = ${id}`;
+  const runs = await sql`SELECT * FROM runs WHERE id = ${id} AND (owner_key IS NULL OR owner_key = ${owner})`;
   if (runs.length === 0) return null;
 
   const responses = await sql`
@@ -168,12 +214,13 @@ export async function getRun(id: string) {
   `;
 
   const row = runs[0];
+  const snapshot = row.snapshot as RunCheckpoint | null;
   return {
     ...row,
     models: JSON.parse(row.models as string),
-    responses,
-    synthesis: syntheses[0] ? JSON.parse(syntheses[0].result as string) : null,
-    synthesisModel: syntheses[0]?.model_used ?? null,
+    responses: snapshot ? snapshot.responses.map((response, index) => ({ ...response, id: index, model_name: response.modelName, base_architecture: response.family, time_ms: response.timeMs, input_tokens: response.inputTokens, output_tokens: response.outputTokens })) : responses,
+    synthesis: snapshot?.synthesis ?? (syntheses[0] ? JSON.parse(syntheses[0].result as string) : null),
+    synthesisModel: snapshot?.synthesisModel ?? syntheses[0]?.model_used ?? null,
   };
 }
 
@@ -186,7 +233,7 @@ export async function saveRunTelemetry(record: string) {
   `;
 }
 
-export async function listRunTelemetry(limit = 500): Promise<Array<{ record: string }>> {
+export async function listRunTelemetry(limit = 500, owner: string | null = null): Promise<Array<{ record: string }>> {
   await initDb();
   const sql = getClient();
   const rows = await sql`
@@ -194,7 +241,11 @@ export async function listRunTelemetry(limit = 500): Promise<Array<{ record: str
     ORDER BY created_at DESC
     LIMIT ${limit}
   `;
-  return rows.map((row) => ({ record: String(row.record ?? "") }));
+  const snapshots = await sql`SELECT snapshot FROM runs WHERE owner_key = ${owner} AND snapshot->'synthesis' IS NOT NULL ORDER BY created_at DESC LIMIT ${limit}`;
+  return [...rows.map((row) => ({ record: String(row.record ?? "") })), ...snapshots.map((row) => {
+    const run = row.snapshot as RunCheckpoint;
+    return { record: JSON.stringify(buildRunTelemetry({ ts: run.createdAt, plan: "web-review", contentHash: run.id, contextRepo: "private-context", roster: "custom", synthesisModel: run.synthesisModel, durationSec: Math.round((Date.parse(run.updatedAt) - Date.parse(run.createdAt)) / 1000), synthesis: run.synthesis!, responses: run.responses, usedModels: run.models })) };
+  })];
 }
 
 export async function getPlanStatus(runId: string) {
@@ -254,16 +305,17 @@ export async function upsertHookJob(input: {
   `;
 }
 
-export async function listRuns() {
+export async function listRuns(owner: string | null = null) {
   await initDb();
   const sql = getClient();
 
   const runs = await sql`
     SELECT r.id, r.content, r.prompt, r.total_cost, r.context_metadata, r.created_at,
-      COUNT(resp.id)::int as response_count,
-      (SELECT COUNT(*)::int FROM syntheses s WHERE s.run_id = r.id) as has_synthesis
+      CASE WHEN r.snapshot IS NOT NULL THEN jsonb_array_length(r.snapshot->'responses') ELSE COUNT(resp.id)::int END as response_count,
+      CASE WHEN r.snapshot IS NOT NULL THEN CASE WHEN r.snapshot->'synthesis' IS NOT NULL THEN 1 ELSE 0 END ELSE (SELECT COUNT(*)::int FROM syntheses s WHERE s.run_id = r.id) END as has_synthesis
     FROM runs r
     LEFT JOIN responses resp ON resp.run_id = r.id
+    WHERE r.owner_key IS NULL OR r.owner_key = ${owner}
     GROUP BY r.id, r.content, r.prompt, r.total_cost, r.context_metadata, r.created_at
     ORDER BY r.created_at DESC
     LIMIT 50

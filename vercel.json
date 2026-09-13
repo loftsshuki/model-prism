@@ -6,5 +6,6 @@
     "src/app/api/synthesize/route.ts": {
       "maxDuration": 60
     }
-  }
+  },
+  "installCommand": "npm ci"
 }

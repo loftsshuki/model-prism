@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 
 import { useEffect, useMemo, useState } from "react";
 import { authHeaders } from "@/lib/client-api";
@@ -41,7 +42,7 @@ export default function HooksDashboardPage() {
   };
 
   useEffect(() => {
-    load();
+    queueMicrotask(() => { void load(); });
     const interval = window.setInterval(load, 15000);
     return () => window.clearInterval(interval);
   }, []);
@@ -60,21 +61,21 @@ export default function HooksDashboardPage() {
   }, [data, jobs]);
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100 px-6 py-8">
+    <main className="min-h-screen bg-cream text-ink px-6 py-8">
       <div className="max-w-6xl mx-auto space-y-8">
         <header className="flex items-start justify-between gap-4">
           <div>
-            <a href="/" className="text-xs uppercase tracking-[0.2em] text-neutral-500 hover:text-neutral-300">← Back</a>
+            <Link href="/" className="text-xs uppercase tracking-[0.2em] text-grey-50 hover:text-grey-60">← Back</Link>
             <h1 className="mt-4 text-3xl font-semibold tracking-tight">Plan-Review Hook Dashboard</h1>
-            <p className="mt-2 text-sm text-neutral-500">
+            <p className="mt-2 text-sm text-grey-50">
               Live hook/council activity. Hook workers can POST jobs to <code>/api/hook-jobs</code>; this page refreshes automatically.
             </p>
           </div>
-          <button onClick={load} className="rounded-lg border border-neutral-800 px-4 py-2 text-sm text-neutral-300 hover:border-neutral-600">Refresh</button>
+          <button onClick={load} className="rounded-lg border border-border px-4 py-2 text-sm text-grey-60 hover:border-green">Refresh</button>
         </header>
 
         {loading ? (
-          <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-6 text-neutral-400">Loading dashboard…</div>
+          <div className="rounded-xl border border-border bg-white p-6 text-grey-50">Loading dashboard…</div>
         ) : (
           <>
             <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -98,9 +99,9 @@ export default function HooksDashboardPage() {
               <StatusColumn title="Failed" jobs={jobs.filter((job) => job.status === "failed")} empty="No failed hook jobs." />
             </section>
 
-            <section className="rounded-xl border border-neutral-800 bg-neutral-900 p-5 space-y-3">
+            <section className="rounded-xl border border-border bg-white p-5 space-y-3">
               <h2 className="text-lg font-semibold">Hook worker contract</h2>
-              <pre className="overflow-x-auto rounded-lg bg-neutral-950 p-4 text-xs text-neutral-400">{`POST /api/hook-jobs
+              <pre className="overflow-x-auto rounded-lg bg-cream p-4 text-xs text-grey-50">{`POST /api/hook-jobs
 {
   "id": "plan-file-hash-or-job-id",
   "planFile": "docs/plans/my-plan.md",
@@ -114,14 +115,14 @@ export default function HooksDashboardPage() {
             </section>
 
             {data?.recommendations?.length ? (
-              <section className="rounded-xl border border-neutral-800 bg-neutral-900 p-5">
+              <section className="rounded-xl border border-border bg-white p-5">
                 <h2 className="text-lg font-semibold mb-3">Current roster recommendations</h2>
                 <div className="space-y-2">
                   {data.recommendations.slice(0, 5).map((item) => (
-                    <div key={item.id} className="border border-neutral-800 rounded-lg p-3 text-sm">
-                      <span className="text-neutral-100 font-medium">{item.modelName}</span>
-                      <span className="ml-2 text-[11px] uppercase tracking-wide text-neutral-500">{item.type}</span>
-                      <p className="mt-1 text-neutral-500">{item.reason}</p>
+                    <div key={item.id} className="border border-border rounded-lg p-3 text-sm">
+                      <span className="text-ink font-medium">{item.modelName}</span>
+                      <span className="ml-2 text-[11px] uppercase tracking-wide text-grey-50">{item.type}</span>
+                      <p className="mt-1 text-grey-50">{item.reason}</p>
                     </div>
                   ))}
                 </div>
@@ -136,8 +137,8 @@ export default function HooksDashboardPage() {
 
 function Metric({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-5">
-      <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">{label}</p>
+    <div className="rounded-xl border border-border bg-white p-5">
+      <p className="text-xs uppercase tracking-[0.18em] text-grey-50">{label}</p>
       <p className="mt-2 text-2xl font-semibold">{value}</p>
     </div>
   );
@@ -145,17 +146,17 @@ function Metric({ label, value }: { label: string; value: string | number }) {
 
 function StatusColumn({ title, jobs, empty }: { title: string; jobs: HookJob[]; empty: string }) {
   return (
-    <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-5 min-h-44">
-      <h2 className="text-sm font-semibold text-neutral-300">{title}</h2>
+    <div className="rounded-xl border border-border bg-white p-5 min-h-44">
+      <h2 className="text-sm font-semibold text-grey-60">{title}</h2>
       {jobs.length === 0 ? (
-        <p className="mt-4 text-sm text-neutral-500">{empty}</p>
+        <p className="mt-4 text-sm text-grey-50">{empty}</p>
       ) : (
         <div className="mt-4 space-y-3">
           {jobs.slice(0, 8).map((job) => (
-            <div key={job.id} className="rounded-lg border border-neutral-800 bg-neutral-950/60 p-3">
-              <p className="truncate text-sm text-neutral-200" title={job.plan_file}>{job.plan_file}</p>
-              <p className="mt-1 text-[11px] text-neutral-500">{new Date(job.updated_at).toLocaleString()}</p>
-              {job.run_id && <a href={`/runs/${job.run_id}`} className="mt-2 block text-xs text-violet-300 hover:text-violet-200">Open run →</a>}
+            <div key={job.id} className="rounded-lg border border-border bg-cream/60 p-3">
+              <p className="truncate text-sm text-ink" title={job.plan_file}>{job.plan_file}</p>
+              <p className="mt-1 text-[11px] text-grey-50">{new Date(job.updated_at).toLocaleString()}</p>
+              {job.run_id && <Link href={`/runs/${job.run_id}`} className="mt-2 block text-xs text-green hover:text-green">Open run →</Link>}
               {job.error && <p className="mt-2 text-xs text-red-300">{job.error}</p>}
             </div>
           ))}

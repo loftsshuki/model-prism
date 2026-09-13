@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { saveSynthesis } from "@/lib/db";
-import { requireAdminToken } from "@/lib/api-auth";
+import { getRun, saveSynthesis, updateRunCost } from "@/lib/db";
+import { requireAdminToken, runOwner } from "@/lib/api-auth";
 
 export async function POST(req: NextRequest) {
   const unauthorized = requireAdminToken(req);
@@ -13,7 +13,9 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    if (!await getRun(runId, runOwner(req))) return NextResponse.json({ error: "Run not found" }, { status: 404 });
     await saveSynthesis(runId, result, modelUsed);
+    await updateRunCost(runId, 0);
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("Save synthesis error:", error);

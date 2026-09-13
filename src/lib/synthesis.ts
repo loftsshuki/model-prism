@@ -1,7 +1,18 @@
 import { z } from "zod";
+import { SYNTHESIS_IDS, SYNTHESIS_MAX_TOKENS } from "./model-catalog";
+import { requestCompletion } from "./openrouter-client";
+import type { RunBudget } from "./run-budget";
+import type { ModelUsage, SynthesisResult as ReviewResult } from "./types";
+
+const FindingSchema = z.object({
+  id: z.string(), title: z.string(), severity: z.enum(["critical", "high", "medium", "low"]),
+  recommendation: z.string(), supportingModels: z.array(z.string()),
+  evidence: z.array(z.object({ source: z.string(), quote: z.string().min(1) })),
+});
 
 export const SynthesisSchema = z.object({
-  masterDocument: z.string().describe(
+  findings: z.array(FindingSchema).optional(),
+  masterDocument: z.string().trim().min(1).describe(
     "The definitive, actionable synthesis document. Written as a single coherent piece that incorporates the best insights from ALL model responses. Not a summary — a master version that someone can act on immediately. Use markdown formatting with headers, bullets, and bold for emphasis. This should be significantly better than any individual model's response because it cherry-picks the best insights from each."
   ),
 
@@ -43,13 +54,28 @@ export const SynthesisSchema = z.object({
   ).describe("For each major theme identified across all responses, rate how thoroughly each model covered it (0-3). Use model names (not IDs) as keys. Include 4-8 themes."),
 });
 
-export type SynthesisResult = z.infer<typeof SynthesisSchema>;
+export type SynthesisResult = ReviewResult;
+
+export function validateSynthesis(value: unknown, sources: Record<string, string> = {}): SynthesisResult {
+  // Legacy records may lack breakdown fields. Never accept a blank master document.
+  const parsed = SynthesisSchema.parse({ consensus: [], uniqueInsights: [], disagreements: [], blindSpots: [], themeMatrix: [], ...(value && typeof value === "object" ? value : {}) });
+  return { ...parsed, findings: parsed.findings?.map((finding) => ({ ...finding,
+    evidenceVerified: finding.evidence.length > 0 && finding.evidence.every(({ source, quote }) =>
+      quote.trim().length >= 12 && typeof sources[source] === "string" && sources[source].includes(quote)),
+    supportingModels: finding.supportingModels.filter((id) => id.startsWith("model:") && id in sources),
+  })) };
+}
 
 // JSON Schema for Anthropic tool_use (mirrors SynthesisSchema above)
 export const SynthesisJsonSchema = {
   type: "object" as const,
-  required: ["masterDocument", "consensus", "uniqueInsights", "disagreements", "blindSpots", "themeMatrix"],
+  required: ["masterDocument", "consensus", "uniqueInsights", "disagreements", "blindSpots", "themeMatrix", "findings"],
   properties: {
+    findings: { type: "array", items: { type: "object", required: ["id", "title", "severity", "recommendation", "evidence", "supportingModels"], properties: {
+      id: { type: "string" }, title: { type: "string" }, severity: { type: "string", enum: ["critical", "high", "medium", "low"] }, recommendation: { type: "string" },
+      supportingModels: { type: "array", items: { type: "string" } },
+      evidence: { type: "array", items: { type: "object", required: ["source", "quote"], properties: { source: { type: "string" }, quote: { type: "string" } } } },
+    } } },
     masterDocument: { type: "string", description: "The definitive, actionable synthesis document. Written as a single coherent piece that incorporates the best insights from ALL model responses. Use markdown formatting." },
     consensus: {
       type: "array",
@@ -111,27 +137,13 @@ export const SynthesisJsonSchema = {
   },
 };
 
-// Anthropic API model IDs for the synthesis step. Single source of truth — exported
-// so callers (e.g. the review-frontmatter writer) record exactly the model that ran
-// instead of a hardcoded literal that silently drifts out of date.
-// Opus 4.8 is the current top-of-family (2026-05-30) and prices identically to 4.6/4.7
-// ($5/$25 per M) — a free quality upgrade for the synthesis step.
+// Direct API aliases retained for compatibility; app and CLI use OpenRouter.
 export const SYNTHESIS_MODEL_IDS: Record<"sonnet" | "opus", string> = {
-  opus: "claude-opus-4-8",
-  sonnet: "claude-sonnet-4-6",
+  opus: SYNTHESIS_IDS.opus.replace("anthropic/", ""),
+  sonnet: SYNTHESIS_IDS.sonnet.replace("anthropic/", ""),
 };
 
-// OpenRouter slug for the synthesis step. Routing synthesis through OpenRouter
-// (instead of the direct Anthropic API) means the whole pipeline — council +
-// synthesis — bills to ONE account (OPENROUTER_API_KEY), so an empty Anthropic
-// pay-as-you-go balance can no longer strand a fully-completed council run at
-// the final step. Opus 4.8 is the default synthesizer for the plan-review CLI.
-// (Previously Fable 5; swapped 2026-06-16 after Fable was pulled from access —
-// it lingered in OpenRouter's catalog but returned 404 at inference, failing
-// every plan review at the synthesis step. Opus 4.8 verified callable on
-// OpenRouter 2026-06-16.) NOTE: the OpenRouter slug is DOTTED (claude-opus-4.8),
-// not the hyphenated Anthropic API id (claude-opus-4-8) in SYNTHESIS_MODEL_IDS.
-export const OPENROUTER_SYNTHESIS_MODEL_ID = "anthropic/claude-opus-4.8";
+export const OPENROUTER_SYNTHESIS_MODEL_ID = SYNTHESIS_IDS.opus;
 
 // An Error tagged as non-retryable — a retry would only reproduce the same failure
 // (malformed request, bad key, exhausted credits), so the loop fails fast on it.
@@ -212,7 +224,7 @@ export async function synthesizeDirect(
         throw new Error("No structured output returned from synthesis model");
       }
 
-      return toolBlock.input as SynthesisResult;
+      return validateSynthesis(toolBlock.input, { content, context: context ?? "", ...Object.fromEntries(responses.map((r) => [`model:${r.model}`, r.response])) });
     } catch (e) {
       lastError = e instanceof Error ? e : new Error(String(e));
       // Fast-fail on non-retryable billing/auth/bad-request errors. A thrown network
@@ -238,105 +250,32 @@ export async function synthesizeDirect(
 // calling) instead of the direct Anthropic API. Same SynthesisResult contract.
 // Used by the plan-review CLI so the whole pipeline bills to OPENROUTER_API_KEY.
 export async function synthesizeViaOpenRouter(opts: {
-  openrouterKey: string;
-  content: string;
-  analysisPrompt: string;
+  openrouterKey: string; content: string; analysisPrompt: string;
   responses: Array<{ model: string; modelName: string; family: string; response: string }>;
-  modelId?: string;
-  context?: string;
-  customSynthesisInstructions?: string | null;
+  modelId?: string; context?: string; customSynthesisInstructions?: string | null;
   retryOptions?: { maxAttempts?: number; baseDelayMs?: number };
+  signal?: AbortSignal; budget?: RunBudget; onUsage?: (usage: ModelUsage) => void;
+  reasoningEffort?: string; maxTokens?: number;
 }): Promise<SynthesisResult> {
-  const modelId = opts.modelId ?? OPENROUTER_SYNTHESIS_MODEL_ID;
-  // Opus 4.8 (and other reasoning models) reject FORCED tool_choice — Anthropic
-  // returns "tool_choice forces tool use is not compatible with this model"
-  // because extended thinking is incompatible with forcing a specific tool. So
-  // we use tool_choice:"auto" and append an explicit directive instead; verified
-  // these models reliably emit the tool call this way (finish_reason: tool_calls).
-  const prompt = buildSynthesisPrompt(
-    opts.content, opts.analysisPrompt, opts.responses, opts.context, opts.customSynthesisInstructions
-  ) + "\n\nIMPORTANT: Respond ONLY by calling the `synthesis` tool with the structured result. Do not reply with prose.";
-  const maxAttempts = opts.retryOptions?.maxAttempts ?? 4;
-  const baseDelayMs = opts.retryOptions?.baseDelayMs ?? 2000;
-
-  // One attempt: fetch + extract the forced tool call. Throws TaggedError; the
-  // caller's loop decides retry vs fast-fail. Kept small to bound complexity.
-  const attempt = async (): Promise<SynthesisResult> => {
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${opts.openrouterKey}`,
-        "content-type": "application/json",
-        "HTTP-Referer": "https://model-prism.vercel.app",
-        "X-Title": "Model Prism",
-      },
-      body: JSON.stringify({
-        model: modelId,
-        // 32K, raised from 16K (2026-06-12): a 10-model council synthesis emits an
-        // entire rewritten master plan as tool-call JSON — 16K truncated mid-string
-        // on real plans (finish_reason=length), which surfaced as "arguments were
-        // not valid JSON" on every retry. Fable 5 supports up to 128K output, but a
-        // non-streaming fetch must receive headers before undici's 300s timeout, so
-        // don't raise this further without switching to streaming.
-        max_tokens: 32000,
-        tools: [{
-          type: "function",
-          function: {
-            name: "synthesis",
-            description: "Output the structured synthesis result",
-            parameters: SynthesisJsonSchema,
-          },
-        }],
-        tool_choice: "auto",
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
-
-    if (!res.ok) {
-      const body = await res.text();
-      const e: TaggedError = new Error(`OpenRouter error: ${res.status} ${body.slice(0, 200)}`);
-      e.nonRetryable = res.status === 400 || res.status === 401 || res.status === 403 || isNonRetryableBody(body);
-      throw e;
-    }
-
-    const data = await res.json();
-    const choice = data.choices?.[0];
-    const finishReason = choice?.finish_reason ?? choice?.native_finish_reason;
-    const toolCall = choice?.message?.tool_calls?.[0];
-    const rawArgs = toolCall?.function?.arguments;
-    if (!rawArgs) {
-      // Model returned prose instead of the forced tool call — transient, retry.
-      throw new Error(`No structured output (tool_call) returned from synthesis model (finish_reason=${finishReason ?? "unknown"})`);
-    }
-    try {
-      return JSON.parse(rawArgs) as SynthesisResult;
-    } catch {
-      // finish_reason=length means the arguments were cut mid-string by max_tokens —
-      // a retry at the same cap fails identically, so the message must say so.
-      const detail = `finish_reason=${finishReason ?? "unknown"}, args_len=${rawArgs.length}, tail=${JSON.stringify(rawArgs.slice(-60))}`;
-      throw new Error(
-        finishReason === "length"
-          ? `Synthesis tool_call truncated by max_tokens (${detail})`
-          : `Synthesis tool_call arguments were not valid JSON (${detail})`
-      );
-    }
-  };
-
-  let lastError: Error | null = null;
-  for (let i = 1; i <= maxAttempts; i++) {
-    try {
-      return await attempt();
-    } catch (e) {
-      lastError = e instanceof Error ? e : new Error(String(e));
-      if ((lastError as TaggedError).nonRetryable) throw lastError;
-      if (i < maxAttempts) {
-        const backoffMs = baseDelayMs * 2 ** (i - 1) + Math.floor(Math.random() * 500);
-        console.error(`  Synthesis attempt ${i}/${maxAttempts} failed (${lastError.message.slice(0, 120)}); retrying in ${backoffMs}ms...`);
-        await new Promise((r) => setTimeout(r, backoffMs));
-      }
-    }
-  }
-  throw lastError ?? new Error("Synthesis failed: unknown error");
+  const usage: ModelUsage[] = [];
+  const prompt = buildSynthesisPrompt(opts.content, opts.analysisPrompt, opts.responses, opts.context, opts.customSynthesisInstructions)
+    + "\nRespond by calling the synthesis tool. Evidence source IDs are content, context, or model:<exact model ID>. Quote sources exactly. A model's agreement is not proof of correctness. Report unsupported concerns separately; do not invent citations. Return findings: [] when there are no concrete findings.";
+  const data = await requestCompletion({ apiKey: opts.openrouterKey, model: opts.modelId ?? OPENROUTER_SYNTHESIS_MODEL_ID,
+    messages: [{ role: "user", content: prompt }], maxTokens: opts.maxTokens ?? SYNTHESIS_MAX_TOKENS,
+    tools: [{ type: "function", function: { name: "synthesis", description: "Output the structured synthesis with evidence", parameters: SynthesisJsonSchema } }],
+    signal: opts.signal, budget: opts.budget, reasoningEffort: opts.reasoningEffort,
+    maxAttempts: opts.retryOptions?.maxAttempts, baseDelayMs: opts.retryOptions?.baseDelayMs,
+    onUsage: (record) => { usage.push(record); opts.onUsage?.(record); },
+  });
+  opts.signal?.throwIfAborted();
+  const choice = data.choices?.[0];
+  if (choice?.finish_reason === "length") throw new Error("Synthesis reached its output limit. Council responses are saved; increase the output budget and resume synthesis.");
+  if (!["stop", "tool_calls"].includes(choice?.finish_reason ?? "")) throw new Error("Synthesis did not finish. Resume to retry synthesis only.");
+  const raw = choice?.message?.tool_calls?.find((call) => call.function.name === "synthesis")?.function.arguments;
+  if (!raw) throw new Error("Synthesis returned no structured result. Council responses are saved; resume synthesis.");
+  const sources = { content: opts.content, context: opts.context ?? "", ...Object.fromEntries(opts.responses.map((r) => ["model:" + r.model, r.response])) };
+  try { return { ...validateSynthesis(JSON.parse(raw), sources), usage }; }
+  catch { throw new Error("Synthesis returned invalid structured data. Council responses are saved; resume synthesis."); }
 }
 
 export function buildSynthesisPrompt(
@@ -346,7 +285,7 @@ export function buildSynthesisPrompt(
   context?: string,
   customSynthesisInstructions?: string | null
 ): string {
-  const truncatedContent = content.length > 4000 ? content.slice(0, 4000) + "..." : content;
+  const truncatedContent = content;
 
   const responsesXml = responses
     .map(

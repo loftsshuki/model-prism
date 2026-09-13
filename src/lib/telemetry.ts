@@ -61,7 +61,7 @@ export interface BuildRunArgs {
 
 export function buildRunTelemetry(a: BuildRunArgs): RunTelemetry {
   const models: ModelRunTelemetry[] = a.usedModels.map((m) => {
-    const resp = a.responses.find((r) => r.model === m.id);
+    const resp = a.responses.find((r) => (r.requestedModel ?? r.model) === m.id);
     const status: ModelRunTelemetry["status"] = resp?.fallbackFrom
       ? "fallback"
       : resp?.status === "complete"
@@ -96,9 +96,9 @@ export function buildRunTelemetry(a: BuildRunArgs): RunTelemetry {
     ).length;
 
     return {
-      id: m.id,
-      name: m.name,
-      family: m.family,
+      id: resp?.model ?? m.id,
+      name: resp?.modelName ?? m.name,
+      family: resp?.family ?? m.family,
       tier: m.tier,
       status,
       cost: resp?.cost ?? 0,

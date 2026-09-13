@@ -1,94 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import { fetchModelCatalog, COUNCIL_MAX_TOKENS } from "@/lib/model-catalog";
+import { fanOut } from "@/lib/fan-out";
+import { RunBudget } from "@/lib/run-budget";
+import { requireAdminToken } from "@/lib/api-auth";
 
-// Legacy server-side invoke endpoint. The main app now calls OpenRouter directly
-// from the browser to avoid Vercel duration limits. Keep this route for manual
-// smoke tests and backwards compatibility until no clients depend on it.
 export const maxDuration = 60;
-
+const Input = z.object({ model: z.string(), content: z.string().min(1).max(2_000_000), prompt: z.string().min(1).max(100_000), apiKey: z.string().min(1), maxTokens: z.number().int().positive().max(65536).default(COUNCIL_MAX_TOKENS), maxCost: z.number().positive().default(2) });
 export async function POST(req: NextRequest) {
-  const { model, content, prompt, apiKey, maxTokens } = await req.json();
-
-  if (!apiKey) {
-    return NextResponse.json(
-      { error: "OpenRouter API key required" },
-      { status: 401 }
-    );
-  }
-
-  if (!model || !content || !prompt) {
-    return NextResponse.json(
-      { error: "model, content, and prompt are required" },
-      { status: 400 }
-    );
-  }
-
-  const startTime = Date.now();
-
-  // 55s timeout — leaves headroom before Vercel's 60s hard limit
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 55000);
-
+  const unauthorized = requireAdminToken(req); if (unauthorized) return unauthorized;
+  const parsed = Input.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "Valid model, content, prompt, and OpenRouter key required" }, { status: 400 });
+  const input = parsed.data;
+  const signal = AbortSignal.any([req.signal, AbortSignal.timeout(55000)]);
   try {
-    const response = await fetch(
-      "https://openrouter.ai/api/v1/chat/completions",
-      {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          "X-Title": "Model Prism",
-          "HTTP-Referer": "https://model-prism.vercel.app",
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: maxTokens || 4096,
-          messages: [
-            {
-              role: "user",
-              content: `${prompt}\n\n---\n\n${content}`,
-            },
-          ],
-        }),
-      }
-    );
-
-    clearTimeout(timeout);
-
-    if (!response.ok) {
-      const error = await response.text();
-      return NextResponse.json(
-        {
-          error: `OpenRouter error: ${response.status}`,
-          details: error,
-          timeMs: Date.now() - startTime,
-        },
-        { status: response.status }
-      );
-    }
-
-    const data = await response.json();
-    const choice = data.choices?.[0];
-    const usage = data.usage;
-
-    return NextResponse.json({
-      model,
-      response: choice?.message?.content ?? "",
-      timeMs: Date.now() - startTime,
-      inputTokens: usage?.prompt_tokens ?? 0,
-      outputTokens: usage?.completion_tokens ?? 0,
-      cost:
-        (usage?.prompt_tokens ?? 0) * 0 + (usage?.completion_tokens ?? 0) * 0,
-    });
-  } catch (error) {
-    clearTimeout(timeout);
-    const isTimeout = error instanceof Error && error.name === "AbortError";
-    return NextResponse.json(
-      {
-        error: isTimeout ? "Model timed out (55s limit)" : (error instanceof Error ? error.message : "Unknown error"),
-        timeMs: Date.now() - startTime,
-      },
-      { status: isTimeout ? 504 : 500 }
-    );
-  }
+    const models = await fetchModelCatalog(signal);
+    const model = models.find((item) => item.id === input.model);
+    if (!model) return NextResponse.json({ error: "Text model unavailable" }, { status: 404 });
+    const [result] = await fanOut({ ...input, models: [model], catalog: models, runId: null, signal, budget: new RunBudget(input.maxCost), isAborted: () => signal.aborted, onUpdate: () => {} });
+    return NextResponse.json(result, { status: result.status === "complete" ? 200 : result.status === "incomplete" ? 422 : signal.aborted ? 504 : 502 });
+  } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Invocation failed" }, { status: 502 }); }
 }

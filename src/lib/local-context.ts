@@ -1,3 +1,7 @@
+import type { RunBudget } from "./run-budget";
+import type { ModelUsage } from "./types";
+import { createHash } from "node:crypto";
+import { ENHANCE_MODEL_ID } from "./model-catalog";
 /**
  * Local filesystem context builder — for CLI use.
  *
@@ -361,7 +365,7 @@ export interface LocalContext {
 
 export async function buildLocalContext(
   repoRoot: string,
-  options: { enhance?: boolean; openrouterKey?: string } = {}
+  options: { enhance?: boolean; openrouterKey?: string; budget?: RunBudget; signal?: AbortSignal; onUsage?: (usage: ModelUsage) => void } = {}
 ): Promise<LocalContext> {
   const repoName = path.basename(repoRoot);
   const tree = walkRepo(repoRoot);
@@ -383,7 +387,16 @@ export async function buildLocalContext(
   // Optional AI enhancement (billed to OpenRouter, same account as synthesis)
   if (options.enhance && options.openrouterKey) {
     try {
-      brief = await enhanceBrief(options.openrouterKey, brief, keyFiles);
+      const cacheKey = createHash("sha256").update(JSON.stringify(["brief-v2", ENHANCE_MODEL_ID, brief, keyFiles])).digest("hex");
+      const cacheFile = path.join(repoRoot, ".model-prism", "brief-cache.json");
+      let cached: { key: string; brief: string } | null = null;
+      try { cached = JSON.parse(fs.readFileSync(cacheFile, "utf8")); } catch { /* First enhancement. */ }
+      if (cached?.key === cacheKey && cached.brief) brief = cached.brief;
+      else {
+        brief = await enhanceBrief(options.openrouterKey, brief, keyFiles, options);
+        fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+        fs.writeFileSync(cacheFile, JSON.stringify({ key: cacheKey, brief }));
+      }
     } catch (err) {
       console.warn(`Brief enhancement failed: ${(err as Error).message}. Using template brief.`);
     }
