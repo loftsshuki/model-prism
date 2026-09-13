@@ -50,3 +50,7 @@ next-env.d.ts
 .session.json
 .verifier-personas/
 .model-prism/
+*.review.md.state.json
+*.review.md.state.json.tmp
+/test-results/
+/playwright-report/

@@ -13,7 +13,7 @@
   --grey-10: #DDD5C8;
   --grey-15: #E8E2D9;
   --grey-20: #C4B5A2;
-  --grey-30: #B0A89D;
+  --grey-30: #736B63;
   --grey-40: #736B63;
   --grey-50: #6B6560;
   --grey-60: #4A4540;
@@ -72,10 +72,21 @@ body {
 
 /* CTA text */
 .cta-text {
-  font-size: 11px;
-  letter-spacing: 0.15em;
+  font-size: 12px;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   font-weight: 500;
+}
+
+.safe-bottom { padding-bottom: max(0.75rem, env(safe-area-inset-bottom)); }
+button, a, summary { -webkit-tap-highlight-color: transparent; }
+button:not(:disabled), summary { cursor: pointer; }
+pre, table { max-width: 100%; }
+@media (max-width: 640px) {
+  input, textarea, select { font-size: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
 
 /* Custom scrollbar */

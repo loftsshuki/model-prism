@@ -1,58 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateObject } from "ai";
-import { createAnthropic } from "@ai-sdk/anthropic";
-import { SynthesisSchema, buildSynthesisPrompt } from "@/lib/synthesis";
-import { saveSynthesis } from "@/lib/db";
+import { z } from "zod";
+import { synthesizeViaOpenRouter } from "@/lib/synthesis";
+import { fetchModelCatalog, SYNTHESIS_IDS } from "@/lib/model-catalog";
+import { RunBudget } from "@/lib/run-budget";
+import { saveSynthesis, updateRunCost } from "@/lib/db";
 import { requireAdminToken } from "@/lib/api-auth";
 
-// Legacy server-side synthesis endpoint. The main app now uses synthesizeDirect()
-// from the browser so long syntheses are not capped by Vercel function duration.
-// Keep this route for compatibility until confirmed unused in production.
 export const maxDuration = 60;
-
+const Input = z.object({ runId: z.string().optional(), content: z.string(), analysisPrompt: z.string(), openrouterKey: z.string().min(1), synthesisModel: z.enum(["sonnet", "opus", "fable"]).default("sonnet"), maxCost: z.number().positive().default(2), responses: z.array(z.object({ model: z.string(), modelName: z.string(), family: z.string(), response: z.string().min(1) })).min(2).max(100) });
 export async function POST(req: NextRequest) {
-  const unauthorized = requireAdminToken(req);
-  if (unauthorized) return unauthorized;
-
-  const { runId, content, analysisPrompt, responses, synthesisModel, anthropicKey } = await req.json();
-
-  if (!responses?.length) {
-    return NextResponse.json({ error: "No responses to synthesize" }, { status: 400 });
-  }
-
-  if (!anthropicKey) {
-    return NextResponse.json({ error: "Anthropic API key required for synthesis" }, { status: 401 });
-  }
-
-  const modelId = synthesisModel === "opus"
-    ? "claude-opus-4-6" as const
-    : "claude-sonnet-4-6" as const;
-
-  const prompt = buildSynthesisPrompt(content, analysisPrompt, responses);
-
+  const unauthorized = requireAdminToken(req); if (unauthorized) return unauthorized;
+  const parsed = Input.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "Supply openrouterKey and at least two completed responses. All synthesis now uses OpenRouter." }, { status: 400 });
+  const input = parsed.data;
+  const signal = AbortSignal.any([req.signal, AbortSignal.timeout(55000)]);
   try {
-    const provider = createAnthropic({ apiKey: anthropicKey });
-    const result = await generateObject({
-      model: provider(modelId),
-      schema: SynthesisSchema,
-      prompt,
-    });
-
-    // Save to DB
-    if (runId) {
-      await saveSynthesis(runId, JSON.stringify(result.object), modelId);
-    }
-
-    return NextResponse.json({
-      synthesis: result.object,
-      model: modelId,
-      usage: result.usage,
-    });
-  } catch (error) {
-    console.error("Synthesis error:", error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Synthesis failed" },
-      { status: 500 }
-    );
-  }
+    await fetchModelCatalog(signal);
+    const modelId = SYNTHESIS_IDS[input.synthesisModel];
+    const result = await synthesizeViaOpenRouter({ ...input, modelId, signal, budget: new RunBudget(input.maxCost) });
+    if (input.runId) { await saveSynthesis(input.runId, JSON.stringify(result), modelId); await updateRunCost(input.runId, 0); }
+    return NextResponse.json({ synthesis: result, model: modelId, usage: result.usage });
+  } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Synthesis failed" }, { status: signal.aborted ? 504 : 502 }); }
 }

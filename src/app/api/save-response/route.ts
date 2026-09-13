@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { saveResponse, updateRunCost } from "@/lib/db";
-import { requireAdminToken } from "@/lib/api-auth";
+import { getRun } from "@/lib/db";
+import { requireAdminToken, runOwner } from "@/lib/api-auth";
 
 export async function POST(req: NextRequest) {
   const unauthorized = requireAdminToken(req);
@@ -12,6 +13,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "runId and model required" }, { status: 400 });
   }
 
+  if (!await getRun(runId, runOwner(req))) return NextResponse.json({ error: "Run not found" }, { status: 404 });
   await saveResponse(
     runId,
     model,

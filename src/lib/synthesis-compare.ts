@@ -28,6 +28,7 @@ function significantLines(text = "", matcher: RegExp) {
   for (const raw of text.split("\n")) {
     const line = normalize(raw);
     if (line.length < 18 || !matcher.test(line)) continue;
+    if (/\b(no|without|not a)\b.{0,30}\b(critical|security|risk|blocker|vulnerability)\b/i.test(line)) continue;
     const key = line.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -50,12 +51,12 @@ export function compareSyntheses(previous: SynthesisResult, next: SynthesisResul
   const previousText = previous.masterDocument || "";
   const nextText = next.masterDocument || "";
   const previousRisks = [
-    ...significantLines(previousText, RISK_WORDS),
+    ...(previous.findings ? previous.findings.map((finding) => finding.title) : significantLines(previousText, RISK_WORDS)),
     ...(previous.blindSpots || []).map((item) => normalize(item)),
     ...(previous.disagreements || []).map((item) => normalize(item.topic)),
   ].filter(Boolean);
   const nextRisks = [
-    ...significantLines(nextText, RISK_WORDS),
+    ...(next.findings ? next.findings.map((finding) => finding.title) : significantLines(nextText, RISK_WORDS)),
     ...(next.blindSpots || []).map((item) => normalize(item)),
     ...(next.disagreements || []).map((item) => normalize(item.topic)),
   ].filter(Boolean);

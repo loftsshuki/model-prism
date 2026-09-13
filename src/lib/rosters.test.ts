@@ -27,17 +27,17 @@ describe("resolveAutoRoster", () => {
   const small = "x".repeat(400); // ~100 tokens
 
   it("picks frontier for substantial plans, cheap for trivial ones", () => {
-    expect(resolveAutoRoster(big).roster).toBe("default");
+    expect(resolveAutoRoster(big).roster).toBe("frontier");
     expect(resolveAutoRoster(small).roster).toBe("cheap");
   });
 
   it("honors an explicit criticality override regardless of size", () => {
     expect(resolveAutoRoster("---\ncriticality: low\n---\n" + big).roster).toBe("cheap");
-    expect(resolveAutoRoster("---\ncriticality: high\n---\n" + small).roster).toBe("default");
+    expect(resolveAutoRoster("---\ncriticality: high\n---\n" + small).roster).toBe("frontier");
   });
 
   it("respects a custom threshold", () => {
-    expect(resolveAutoRoster(small, 50).roster).toBe("default"); // ~100 tokens ≥ 50
+    expect(resolveAutoRoster(small, 50).roster).toBe("frontier"); // ~100 tokens ≥ 50
     expect(resolveAutoRoster(big, 5000).roster).toBe("cheap"); // ~2000 tokens < 5000
   });
 

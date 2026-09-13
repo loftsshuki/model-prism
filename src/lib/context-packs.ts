@@ -1,5 +1,8 @@
+import { ENHANCE_MODEL_ID } from "./model-catalog";
+import { requestCompletion } from "./openrouter-client";
+import type { RunBudget } from "./run-budget";
+import type { ModelUsage } from "./types";
 import { ContextPack, RepoFile } from "./types";
-import { estimateTokens } from "./model-registry";
 
 // --- localStorage CRUD (metadata only) ---
 
@@ -297,12 +300,13 @@ Do NOT include instructions, caveats, or meta-commentary. Just the summary.`;
 // account (OPENROUTER_API_KEY) — the Anthropic API is never called directly,
 // so an empty/zero-credit Anthropic account no longer breaks enhancement.
 // Sonnet (cheap, fast) is enough for a structural brief; reserve Opus for synthesis.
-const ENHANCE_MODEL_ID = "anthropic/claude-sonnet-4-6";
+
 
 export async function enhanceBrief(
   openrouterKey: string,
   templateBrief: string,
-  keyFileContents: Record<string, string>
+  keyFileContents: Record<string, string>,
+  options?: { budget?: RunBudget; signal?: AbortSignal; onUsage?: (usage: ModelUsage) => void }
 ): Promise<string> {
   const fileSection = Object.entries(keyFileContents)
     .map(([path, content]) => `### ${path}\n\`\`\`\n${content.slice(0, 10000)}\n\`\`\``)
@@ -310,30 +314,9 @@ export async function enhanceBrief(
 
   const userMessage = `TEMPLATE BRIEF:\n${templateBrief}\n\nKEY FILE CONTENTS:\n${fileSection}`;
 
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${openrouterKey}`,
-      "content-type": "application/json",
-      "HTTP-Referer": "https://model-prism.vercel.app",
-      "X-Title": "Model Prism",
-    },
-    body: JSON.stringify({
-      model: ENHANCE_MODEL_ID,
-      max_tokens: 2048,
-      messages: [
-        { role: "system", content: ENHANCE_PROMPT },
-        { role: "user", content: userMessage },
-      ],
-    }),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Enhancement failed: ${res.status} ${err.slice(0, 200)}`);
-  }
-
-  const data = await res.json();
+  const data = await requestCompletion({ apiKey: openrouterKey, model: ENHANCE_MODEL_ID, maxTokens: 4096,
+    messages: [{ role: "system", content: ENHANCE_PROMPT }, { role: "user", content: userMessage }], ...options });
+  if (data.choices?.[0]?.finish_reason !== "stop") throw new Error("Brief enhancement did not finish. Retry or keep the template brief.");
   const text = data.choices?.[0]?.message?.content;
   if (!text) {
     throw new Error("No text returned from enhancement model");

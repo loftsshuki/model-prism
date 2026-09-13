@@ -1,8 +1,9 @@
 "use client";
+import Link from "next/link";
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { SynthesisResult } from "@/lib/types";
+import { ModelResponse, SynthesisResult } from "@/lib/types";
 import { authHeaders, jsonHeaders } from "@/lib/client-api";
 import { buildPlanFrontmatter, getPlanStatus, PLAN_APPROVAL_STATUSES, PlanApprovalStatus, setPlanStatus } from "@/lib/plan-status";
 import { buildActionChecklistMarkdown, extractActionItems } from "@/lib/review-analysis";
@@ -19,6 +20,7 @@ interface SavedRun {
   models: string[];
   responses: Array<{
     model: string;
+    status?: ModelResponse["status"];
     model_name: string;
     response: string | null;
     error: string | null;
@@ -29,6 +31,7 @@ interface SavedRun {
   }>;
   synthesis: SynthesisResult | null;
   synthesisModel: string | null;
+  snapshot?: import("@/lib/run-checkpoint").RunCheckpoint;
 }
 
 function exportToMarkdown(run: SavedRun): string {
@@ -43,6 +46,9 @@ function exportToMarkdown(run: SavedRun): string {
   lines.push("");
 
   if (run.synthesis) {
+    lines.push(`## Master document`);
+    lines.push(run.synthesis.masterDocument ?? "");
+    lines.push(`Recorded cost: ${Number(run.total_cost).toFixed(4)}`);
     lines.push(`## Synthesis`);
     lines.push("");
 
@@ -249,9 +255,9 @@ export default function RunPage() {
   return (
     <div className="min-h-screen bg-cream text-ink">
       <header className="bg-green text-cream">
-        <div className="max-w-5xl mx-auto px-6 py-5 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <a href="/" className="flex items-center gap-4 hover:opacity-80 transition-opacity">
+        <div className="max-w-5xl mx-auto px-4 py-5 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-4">
+            <Link href="/" className="flex items-center gap-4 hover:opacity-80 transition-opacity">
               <div className="w-9 h-9 border border-cream/30 flex items-center justify-center">
                 <span className="font-display text-lg font-bold tracking-tight">P</span>
               </div>
@@ -259,9 +265,10 @@ export default function RunPage() {
                 <h1 className="font-display text-xl font-bold tracking-tight leading-none">Model Prism</h1>
                 <p className="text-[10px] tracking-[0.2em] uppercase text-cream/50 mt-0.5">One Input, Many Angles</p>
               </div>
-            </a>
+            </Link>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-3">
+            {run.snapshot && <Link className="text-sm underline" href={`/?resume=${run.id}`}>Resume</Link>}
             <button
               onClick={handleExport}
               className="cta-text px-4 py-2 border border-cream/30 text-cream/70 hover:text-cream hover:border-cream/60 transition-colors duration-300"
@@ -280,9 +287,9 @@ export default function RunPage() {
             >
               Re-run
             </button>
-            <a href="/history" className="cta-text text-cream/60 hover:text-cream transition-colors duration-300">
+            <Link href="/history" className="cta-text text-cream/60 hover:text-cream transition-colors duration-300">
               History
-            </a>
+            </Link>
           </div>
         </div>
       </header>
@@ -348,7 +355,7 @@ export default function RunPage() {
               response={{
                 model: r.model,
                 modelName: r.model_name || r.model,
-                status: r.error ? "error" : "complete",
+                status: r.status ?? (r.error ? "error" : "complete"),
                 response: r.response ?? undefined,
                 error: r.error ?? undefined,
                 timeMs: r.time_ms ?? undefined,

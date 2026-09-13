@@ -13,7 +13,7 @@ import {
 } from "@/lib/context-packs";
 import {
   getCachedTree, setCachedTree, getCachedFileContent, setCachedFileContent,
-  invalidateBranch, getCacheSize, clearAllCache,
+  invalidateBranch,
 } from "@/lib/context-cache";
 import { CONTEXT_PACK_TEMPLATES, getContextTemplate, suggestFilesForContextTemplate } from "@/lib/context-templates";
 import { estimateTokens } from "@/lib/model-registry";
@@ -21,7 +21,7 @@ import { cn } from "@/lib/utils";
 
 interface ContextPanelProps {
   githubPat: string;
-  anthropicKey: string;
+  openrouterKey: string;
   activePack: ContextPack | null;
   contextEnabled: boolean;
   contentText: string; // user's pasted content — for file reference detection
@@ -240,7 +240,7 @@ function getAllFiles(node: TreeNode): string[] {
 
 // --- Main Component ---
 export function ContextPanel({
-  githubPat, anthropicKey, activePack, contextEnabled, contentText,
+  githubPat, openrouterKey, activePack, contextEnabled, contentText,
   fileContents, onPackChange, onContextEnabledChange, onFileContentsChange, onContextTokensChange,
 }: ContextPanelProps) {
   const [collapsed, setCollapsed] = useState(!activePack);
@@ -295,7 +295,7 @@ export function ContextPanel({
 
   // Load packs on mount
   useEffect(() => {
-    setPacks(getContextPacks());
+    queueMicrotask(() => setPacks(getContextPacks()));
   }, []);
 
   // Browser-only folder picker attributes are not part of React's standard input props.
@@ -315,8 +315,8 @@ export function ContextPanel({
   // Detect file references in content
   useEffect(() => {
     if (!contentText || treeNodes.length === 0) {
-      setDetectedFiles([]);
-      return;
+      const reset = setTimeout(() => setDetectedFiles([]), 0);
+      return () => clearTimeout(reset);
     }
     const timer = setTimeout(() => {
       const allFiles: RepoFile[] = [];
@@ -360,6 +360,48 @@ export function ContextPanel({
     setReposLoading(false);
   }, [githubPat]);
 
+  const generateBriefFromTree = useCallback(async (repo: string, branch: string, files: RepoFile[]) => {
+    // Try to fetch package.json for stack detection
+    let pkg: object | undefined;
+    try {
+      const result = await fetchFileContent(githubPat, repo, "package.json", branch);
+      if (result.ok) {
+        pkg = JSON.parse(result.content);
+      }
+    } catch { /* ignore */ }
+
+    const text = generateTemplateBrief(repo, branch, files, pkg);
+    setBrief(text);
+    setPackName(repo.split("/").pop() || "");
+  }, [githubPat]);
+
+  const loadTree = useCallback(async (repo: string, branch: string) => {
+    setTreeLoading(true);
+    setError(null);
+    try {
+      // Check cache first
+      const cached = await getCachedTree(repo, branch);
+      if (cached) {
+        const nodes = buildTreeNodes(cached.files);
+        setTreeNodes(nodes);
+        setTreeTruncated(false); // We don't cache truncation state simply
+        await generateBriefFromTree(repo, branch, cached.files);
+        setTreeLoading(false);
+        return;
+      }
+
+      const result = await fetchTree(githubPat, repo, branch);
+      setTreeTruncated(result.truncated);
+      await setCachedTree(repo, branch, result.files, result.truncated);
+      const nodes = buildTreeNodes(result.files);
+      setTreeNodes(nodes);
+      await generateBriefFromTree(repo, branch, result.files);
+    } catch (err) {
+      setError((err as Error).message || "Failed to load repository tree");
+    }
+    setTreeLoading(false);
+  }, [githubPat, generateBriefFromTree]);
+
   const handleRepoSelect = useCallback(async (repoName: string) => {
     setSelectedRepo(repoName);
     setError(null);
@@ -378,49 +420,7 @@ export function ContextPanel({
 
     // Load tree
     await loadTree(repoName, repo.default_branch);
-  }, [githubPat, repos]);
-
-  const loadTree = useCallback(async (repo: string, branch: string) => {
-    setTreeLoading(true);
-    setError(null);
-    try {
-      // Check cache first
-      const cached = await getCachedTree(repo, branch);
-      if (cached) {
-        const nodes = buildTreeNodes(cached.files);
-        setTreeNodes(nodes);
-        setTreeTruncated(false); // We don't cache truncation state simply
-        generateBriefFromTree(repo, branch, cached.files);
-        setTreeLoading(false);
-        return;
-      }
-
-      const result = await fetchTree(githubPat, repo, branch);
-      setTreeTruncated(result.truncated);
-      await setCachedTree(repo, branch, result.files, result.truncated);
-      const nodes = buildTreeNodes(result.files);
-      setTreeNodes(nodes);
-      generateBriefFromTree(repo, branch, result.files);
-    } catch (err) {
-      setError((err as Error).message || "Failed to load repository tree");
-    }
-    setTreeLoading(false);
-  }, [githubPat]);
-
-  const generateBriefFromTree = useCallback(async (repo: string, branch: string, files: RepoFile[]) => {
-    // Try to fetch package.json for stack detection
-    let pkg: object | undefined;
-    try {
-      const result = await fetchFileContent(githubPat, repo, "package.json", branch);
-      if (result.ok) {
-        pkg = JSON.parse(result.content);
-      }
-    } catch { /* ignore */ }
-
-    const text = generateTemplateBrief(repo, branch, files, pkg);
-    setBrief(text);
-    setPackName(repo.split("/").pop() || "");
-  }, [githubPat]);
+  }, [githubPat, repos, loadTree]);
 
   const handleBranchChange = useCallback(async (branch: string) => {
     setSelectedBranch(branch);
@@ -497,7 +497,7 @@ export function ContextPanel({
   }, [collectRepoFiles, loadSelectedFileContents, packName, selectedRepo]);
 
   const handleEnhance = useCallback(async () => {
-    if (!anthropicKey || !selectedRepo || !selectedBranch) return;
+    if (!openrouterKey || !selectedRepo || !selectedBranch) return;
     setEnhancing(true);
     setEnhanceError(null);
 
@@ -522,13 +522,13 @@ export function ContextPanel({
         } catch { /* skip individual file failures */ }
       }
 
-      const enhanced = await enhanceBrief(anthropicKey, brief, keyContents);
+      const enhanced = await enhanceBrief(openrouterKey, brief, keyContents);
       setBrief(enhanced);
     } catch (err) {
       setEnhanceError((err as Error).message || "Enhancement failed");
     }
     setEnhancing(false);
-  }, [anthropicKey, selectedRepo, selectedBranch, collectRepoFiles, brief, githubPat]);
+  }, [openrouterKey, selectedRepo, selectedBranch, collectRepoFiles, brief, githubPat]);
 
   const handleToggleFile = useCallback(async (path: string) => {
     setSelectedFiles((prev) => {
@@ -1077,7 +1077,7 @@ export function ContextPanel({
                     rows={8}
                     className="w-full bg-grey-5 border border-border px-3 py-2 text-xs text-ink font-mono leading-relaxed focus:outline-none focus:border-green resize-y"
                   />
-                  {anthropicKey && (
+                  {openrouterKey && (
                     <button
                       onClick={handleEnhance}
                       disabled={enhancing}

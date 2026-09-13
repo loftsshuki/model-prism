@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 
 import { useEffect, useState } from "react";
 import { authHeaders } from "@/lib/client-api";
@@ -37,43 +38,43 @@ export default function ModelsPage() {
   };
 
   useEffect(() => {
-    load();
+    queueMicrotask(() => { void load(); });
   }, []);
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-100 px-6 py-8">
+    <main className="min-h-screen bg-cream text-ink px-6 py-8">
       <div className="max-w-7xl mx-auto space-y-8">
         <header className="flex items-start justify-between gap-4">
           <div>
-            <a href="/" className="text-xs uppercase tracking-[0.2em] text-neutral-500 hover:text-neutral-300">← Back</a>
+            <Link href="/" className="text-xs uppercase tracking-[0.2em] text-grey-50 hover:text-grey-60">← Back</Link>
             <h1 className="mt-4 text-3xl font-semibold tracking-tight">Model Intelligence</h1>
-            <p className="mt-2 text-sm text-neutral-500">
+            <p className="mt-2 text-sm text-grey-50">
               Leaderboard, failure diagnostics, and roster recommendations from the local telemetry ledger.
             </p>
           </div>
-          <button onClick={load} className="rounded-lg border border-neutral-800 px-4 py-2 text-sm text-neutral-300 hover:border-neutral-600">
+          <button onClick={load} className="rounded-lg border border-border px-4 py-2 text-sm text-grey-60 hover:border-green">
             Refresh
           </button>
         </header>
 
-        {loading && <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-6 text-neutral-400">Loading telemetry…</div>}
+        {loading && <div className="rounded-xl border border-border bg-white p-6 text-grey-50">Loading telemetry…</div>}
         {!loading && data?.error && <div className="rounded-xl border border-red-900 bg-red-950/40 p-6 text-red-300">{data.error}</div>}
 
         {!loading && data && !data.error && (
           <>
             <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-5">
-                <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">Runs recorded</p>
+              <div className="rounded-xl border border-border bg-white p-5">
+                <p className="text-xs uppercase tracking-[0.18em] text-grey-50">Runs recorded</p>
                 <p className="mt-2 text-3xl font-semibold">{data.runCount}</p>
               </div>
-              <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-5 md:col-span-2">
-                <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">Telemetry path</p>
-                <p className="mt-2 text-sm text-neutral-300 break-all">{data.telemetryPath}</p>
+              <div className="rounded-xl border border-border bg-white p-5 md:col-span-2">
+                <p className="text-xs uppercase tracking-[0.18em] text-grey-50">Telemetry path</p>
+                <p className="mt-2 text-sm text-grey-60 break-all">{data.telemetryPath}</p>
               </div>
             </section>
 
             {data.runCount === 0 && (
-              <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-6 text-neutral-400">
+              <div className="rounded-xl border border-border bg-white p-6 text-grey-50">
                 No model telemetry yet. Run and synthesize a council review from the home page; Model Prism records one telemetry row after synthesis succeeds.
               </div>
             )}
@@ -83,12 +84,12 @@ export default function ModelsPage() {
                 <h2 className="text-lg font-semibold">Roster Recommendations</h2>
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                   {data.recommendations.map((item) => (
-                    <div key={item.id} className="rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+                    <div key={item.id} className="rounded-xl border border-border bg-white p-4">
                       <div className="flex items-center justify-between gap-3">
-                        <p className="font-medium text-neutral-100">{item.modelName}</p>
-                        <span className="rounded-full bg-neutral-800 px-2 py-1 text-[11px] uppercase tracking-wide text-neutral-300">{item.type}</span>
+                        <p className="font-medium text-ink">{item.modelName}</p>
+                        <span className="rounded-full bg-grey-5 px-2 py-1 text-[11px] uppercase tracking-wide text-grey-60">{item.type}</span>
                       </div>
-                      <p className="mt-2 text-sm text-neutral-500">{item.reason}</p>
+                      <p className="mt-2 text-sm text-grey-50">{item.reason}</p>
                     </div>
                   ))}
                 </div>
@@ -114,9 +115,9 @@ export default function ModelsPage() {
 
             <section className="space-y-3">
               <h2 className="text-lg font-semibold">Leaderboard</h2>
-              <div className="overflow-x-auto rounded-xl border border-neutral-800 bg-neutral-900">
+              <div className="overflow-x-auto rounded-xl border border-border bg-white">
                 <table className="w-full text-sm">
-                  <thead className="bg-neutral-950/70 text-xs uppercase tracking-wide text-neutral-500">
+                  <thead className="bg-cream/70 text-xs uppercase tracking-wide text-grey-50">
                     <tr>
                       <th className="px-4 py-3 text-left">Model</th>
                       <th className="px-4 py-3 text-right">Value</th>
@@ -129,17 +130,17 @@ export default function ModelsPage() {
                   </thead>
                   <tbody className="divide-y divide-neutral-800">
                     {data.leaderboard.map((row) => (
-                      <tr key={row.id} className="hover:bg-neutral-800/40">
+                      <tr key={row.id} className="hover:bg-grey-5/40">
                         <td className="px-4 py-3">
-                          <div className="font-medium text-neutral-100">{row.name}</div>
-                          <div className="text-xs text-neutral-500">{row.family} · {row.tier} · {row.appearances} runs</div>
+                          <div className="font-medium text-ink">{row.name}</div>
+                          <div className="text-xs text-grey-50">{row.family} · {row.tier} · {row.appearances} runs</div>
                         </td>
-                        <td className="px-4 py-3 text-right text-neutral-300">{row.valueScore.toFixed(2)}</td>
-                        <td className="px-4 py-3 text-right text-neutral-300">{pct(row.successRate)}</td>
-                        <td className="px-4 py-3 text-right text-neutral-300">{row.uniquePerRun.toFixed(2)}</td>
-                        <td className="px-4 py-3 text-right text-neutral-300">{row.themeAvg === null ? "—" : row.themeAvg.toFixed(2)}</td>
-                        <td className="px-4 py-3 text-right text-neutral-300">{money(row.totalCost)}</td>
-                        <td className="px-4 py-3 text-neutral-300">{row.verdict}</td>
+                        <td className="px-4 py-3 text-right text-grey-60">{row.valueScore.toFixed(2)}</td>
+                        <td className="px-4 py-3 text-right text-grey-60">{pct(row.successRate)}</td>
+                        <td className="px-4 py-3 text-right text-grey-60">{row.uniquePerRun.toFixed(2)}</td>
+                        <td className="px-4 py-3 text-right text-grey-60">{row.themeAvg === null ? "—" : row.themeAvg.toFixed(2)}</td>
+                        <td className="px-4 py-3 text-right text-grey-60">{money(row.totalCost)}</td>
+                        <td className="px-4 py-3 text-grey-60">{row.verdict}</td>
                       </tr>
                     ))}
                   </tbody>

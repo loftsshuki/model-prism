@@ -66,12 +66,32 @@ export interface ModelInfo {
   contextLength: number;
   inputCostPer1k: number;
   outputCostPer1k: number;
+  maxOutputTokens?: number;
+  supportedParameters?: string[];
+  reasoning?: {
+    mandatory?: boolean;
+    default_enabled?: boolean;
+    supported_efforts?: string[] | null;
+    default_effort?: string;
+  };
+  created?: number;
+  verifiedAt?: string;
+  toolCallApi?: "chat" | "responses";
+}
+
+export interface ModelUsage {
+  requestId: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cost: number;
+  costSource: "provider" | "estimated" | "reserved";
 }
 
 export interface ModelResponse {
   model: string;
   modelName: string;
-  status: "pending" | "streaming" | "complete" | "error";
+  status: "pending" | "streaming" | "complete" | "error" | "incomplete" | "cancelled";
   response?: string;
   error?: string;
   timeMs?: number;
@@ -80,6 +100,11 @@ export interface ModelResponse {
   cost?: number;
   /** Set when a flaky model failed and a reliable substitute answered this slot. */
   fallbackFrom?: string;
+  requestedModel?: string;
+  family?: string;
+  finishReason?: string;
+  usage?: ModelUsage[];
+  costSource?: ModelUsage["costSource"];
 }
 
 export interface RunState {
@@ -117,6 +142,16 @@ export interface SynthesisResult {
     theme: string;
     scores: Record<string, number>;
   }>;
+  findings?: Array<{
+    id: string;
+    title: string;
+    severity: "critical" | "high" | "medium" | "low";
+    recommendation: string;
+    evidence: Array<{ source: string; quote: string }>;
+    supportingModels: string[];
+    evidenceVerified?: boolean;
+  }>;
+  usage?: ModelUsage[];
   // ── Dual-lens fields (fusion unification) ──────────────────────────────────
   // First-class, non-collapsible — backfilled from the judge JSON by
   // judgeToSynthesisFields (same guarantee as blindSpots). The RENDERER owns the two

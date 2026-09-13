@@ -1,6 +1,10 @@
 #!/usr/bin/env node
+import { COUNCIL_MAX_TOKENS, fetchModelCatalog, getModel } from "../src/lib/model-catalog";
+import { RunBudget } from "../src/lib/run-budget";
+import { mergeUsage } from "../src/lib/run-checkpoint";
+import type { ModelUsage } from "../src/lib/types";
 /**
- * Model Prism CLI — review plans with 10 free models + Opus synthesis.
+ * Model Prism CLI — review plans with five diverse models + Opus synthesis.
  *
  * Usage:
  *   npx tsx scripts/review-plan.ts <path-to-plan-or-folder> [options]
@@ -98,7 +102,7 @@ interface Args {
 function parseArgs(): Args {
   const argv = process.argv.slice(2);
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
-    console.log(`Model Prism CLI — Review plans with 10 free models + Opus synthesis
+    console.log(`Model Prism CLI — Review plans with five diverse models + Opus synthesis
 
 Usage:
   npx tsx scripts/review-plan.ts <plan-file-or-folder> [options]
@@ -109,7 +113,7 @@ Options:
   --dry-run                  Print what would run, no API calls
   --max-cost N               Abort batch if cumulative cost > N dollars (default: 30)
   --max-cost-per-plan N      Per-plan circuit breaker (default: 6.00)
-  --min-successful-models N  Require N successful responses before synthesis (default: 6)
+  --min-successful-models N  Require N successful responses before synthesis (default: 3)
   --no-enhance               Skip AI brief enhancement (use template only)
   --review-prompt <path>     Use a custom prompt for the 10-model fan-out instead of
                              the built-in plan-review prompt (also re-labels output
@@ -120,15 +124,11 @@ Options:
                              auto-derived <dir>/reviews/<name>.review.md
   --exclude-model <id>       Drop a council model by ID (repeatable). Useful on
                              second-pass to drop the primary reviewer's model family
-                             for maximum divergence (e.g. --exclude-model openai/gpt-5.5)
+                             for maximum divergence (e.g. --exclude-model openai/gpt-5.6-sol)
   --roster <name>            Select a council preset. Options:
-                               default / frontier (the DEFAULT — 3 free anchors +
-                                        7 frontier reasoning models: MiniMax M2.7,
-                                        GPT-5.5, Gemini 3.5 Flash, Grok 4.3, Qwen 3.7
-                                        Max, DeepSeek V4 Pro, Kimi K2.6. ~$1-2/run.
-                                        Best results; runs on every plan)
-                               cheap    (5 free + 5 cheap paid, ~$0.25/run, tuned for
-                                        bulk / low-stakes throughput)
+                               default / balanced (five complementary reviewers)
+                               frontier (five advanced reviewers for escalation)
+                               cheap    (five economical reviewers)
                                auto     (stakes-adaptive — picks cheap vs frontier PER
                                         plan by size: small plans get cheap, substantial
                                         ones get frontier. A 'criticality: low|high'
@@ -184,7 +184,7 @@ Options:
     // (~4× a large real run) while clearing normal context-heavy fusion reviews.
     maxCost: getNum("--max-cost", 30.0),
     maxCostPerPlan: getNum("--max-cost-per-plan", 6.0),
-    minSuccessfulModels: Math.floor(getNum("--min-successful-models", 6)),
+    minSuccessfulModels: Math.floor(getNum("--min-successful-models", 3)),
     enhance: !argv.includes("--no-enhance"),
     reviewPromptPath: getStr("--review-prompt"),
     synthesisPromptPath: getStr("--synthesis-prompt"),
@@ -265,6 +265,7 @@ function getReviewPath(planPath: string): string {
 
 interface ExistingReview {
   contentHash?: string;
+  reviewInputHash?: string;
   reviewedAt?: string;
 }
 
@@ -280,6 +281,7 @@ function readExistingReviewMeta(reviewPath: string): ExistingReview | null {
     return {
       contentHash: hashMatch?.[1],
       reviewedAt: dateMatch?.[1],
+      reviewInputHash: fm.match(/review-input-hash:\s*(\S+)/)?.[1],
     };
   } catch {
     return null;
@@ -292,6 +294,7 @@ interface ReviewData {
   planPath: string;
   planContent: string;
   contentHash: string;
+  reviewInputHash: string;
   contextRepo: string;
   contextBrief: string;
   synthesis: SynthesisResult;
@@ -300,6 +303,7 @@ interface ReviewData {
   totalInputTokens: number;
   totalOutputTokens: number;
   durationSec: number;
+  totalCost: number;
   outputPathOverride: string | null;
   customReviewMode: boolean;
   // Fusion/risk metadata (optional — only set under --prism-mode fusion).
@@ -355,6 +359,7 @@ function writeReviewFile(data: ReviewData): string {
 ${sourceKey}: ${path.basename(data.planPath)}
 reviewed-at: ${new Date().toISOString()}
 content-hash: ${data.contentHash}
+review-input-hash: ${data.reviewInputHash}
 context-repo: ${data.contextRepo}
 models-succeeded: ${successfulModels.length}
 models-failed: ${failedModels.length}
@@ -362,6 +367,7 @@ synthesis-model: ${OPENROUTER_SYNTHESIS_MODEL_ID}
 total-input-tokens: ${data.totalInputTokens}
 total-output-tokens: ${data.totalOutputTokens}
 duration-sec: ${data.durationSec}
+total-cost-usd: ${data.totalCost.toFixed(6)}
 ${fusionBlock}---
 
 `;
@@ -548,6 +554,7 @@ async function runFusionMerge(opts: {
   synthesisResponses: Array<{ model: string; modelName: string; family: string; response: string }>;
   repoRoot: string;
   synthesisPromptOverride: string | null;
+  budget: RunBudget; signal: AbortSignal; onRequestUsage: (usage: ModelUsage) => void;
 }): Promise<FusionArtifacts> {
   // (B2/B3) Pin the SHA at judge-invocation time — citations resolve against THIS
   // commit, not the dirty working tree (line numbers drift while a plan is edited).
@@ -574,7 +581,7 @@ async function runFusionMerge(opts: {
     reviewPrompt: opts.reviewPrompt,
     context: opts.context,
     lockedDecisions,
-    onUsage,
+    onUsage, budget: opts.budget, signal: opts.signal, onRequestUsage: opts.onRequestUsage,
   });
 
   // Accuracy-aware integrity: drop repo citations that don't resolve/aren't supported
@@ -594,7 +601,7 @@ async function runFusionMerge(opts: {
     judge: filteredJudge,
     draft: opts.planContent,
     customInstructions: opts.synthesisPromptOverride,
-    onUsage,
+    onUsage, budget: opts.budget, signal: opts.signal, onRequestUsage: opts.onRequestUsage,
   });
 
   // Drop synthesizer citations that don't map to a surviving evidence id, then
@@ -623,10 +630,12 @@ async function reviewPlan(
   openrouterKey: string,
   reviewPromptOverride: string | null,
   synthesisPromptOverride: string | null,
-  activeCouncilModels: ModelInfo[]
+  activeCouncilModels: ModelInfo[],
+  batchBudget: RunBudget, signal: AbortSignal
 ): Promise<{ skipped: boolean; skipReason?: "already-reviewed" | "dry-run"; reviewPath?: string; error?: string }> {
   const planContent = fs.readFileSync(planPath, "utf-8");
   const contentHash = hashContent(planContent);
+  const reviewInputHash = hashContent(JSON.stringify([planContent, context, activeCouncilModels.map((model) => model.id), reviewPromptOverride, synthesisPromptOverride, args.prismMode, args.fusionAgentic]));
   // In --output-path mode the cache-hash check reads the explicit output;
   // otherwise it reads the conventional <dir>/reviews/<name>.review.md.
   const reviewPath = args.outputPath
@@ -636,7 +645,7 @@ async function reviewPlan(
   // Check existing
   if (!args.force) {
     const existing = readExistingReviewMeta(reviewPath);
-    if (existing?.contentHash === contentHash) {
+    if (existing?.contentHash === contentHash && existing.reviewInputHash === reviewInputHash) {
       return { skipped: true, skipReason: "already-reviewed", reviewPath };
     }
   }
@@ -685,7 +694,6 @@ async function reviewPlan(
     : "";
 
   const contextString = baseContext + referencedSection;
-  const planName = path.basename(planPath);
 
   // Use custom review prompt if provided, otherwise built-in plan-review prompt.
   const effectiveReviewPrompt = reviewPromptOverride ?? REVIEW_PROMPT;
@@ -694,19 +702,32 @@ async function reviewPlan(
   const paidCount = activeCouncilModels.length - freeCount;
   console.log(`  Fanning out to ${activeCouncilModels.length} council models (${freeCount} free + ${paidCount} paid)...`);
   const startTime = Date.now();
+  const checkpointPath = reviewPath + ".state.json";
+  const signature = hashContent(JSON.stringify([planContent, effectiveReviewPrompt, contextString, args.prismMode, args.fusionAgentic, synthesisPromptOverride]));
+  let state: { signature: string; responses: ModelResponse[]; usage: ModelUsage[] } = { signature, responses: [], usage: [] };
+  try { const saved = JSON.parse(fs.readFileSync(checkpointPath, "utf8")); if (saved.signature === signature && !args.force) state = saved; } catch { /* First run. */ }
+  const budget = new RunBudget(args.maxCostPerPlan, state.usage, batchBudget);
+  const saveState = () => {
+    fs.mkdirSync(path.dirname(checkpointPath), { recursive: true });
+    fs.writeFileSync(checkpointPath + ".tmp", JSON.stringify(state, null, 2));
+    fs.renameSync(checkpointPath + ".tmp", checkpointPath);
+  };
+  const onUsage = (usage: ModelUsage) => { state.usage = mergeUsage([...state.usage, usage]); saveState(); };
+  const done = new Set(state.responses.filter((response) => response.status === "complete").map((response) => response.requestedModel ?? response.model));
 
   let completedCount = 0;
-  const responses = await fanOut({
-    models: activeCouncilModels,
+  await fanOut({
+    models: activeCouncilModels.filter((model) => !done.has(model.id)),
     content: planContent,
     prompt: effectiveReviewPrompt,
     apiKey: openrouterKey,
     runId: null,
-    maxTokens: 4096,
-    isAborted: () => false,
+    maxTokens: COUNCIL_MAX_TOKENS,
+    isAborted: () => signal.aborted, signal, budget, onUsage,
     context: contextString,
     onUpdate: (modelId, resp) => {
-      if (resp.status === "complete" || resp.status === "error") {
+      if (resp.status !== "pending" && resp.status !== "streaming") {
+        state.responses = [...state.responses.filter((item) => (item.requestedModel ?? item.model) !== modelId), resp]; saveState();
         completedCount++;
         const info = activeCouncilModels.find((m) => m.id === modelId);
         const symbol = resp.status === "complete" ? "✓" : "✗";
@@ -718,6 +739,8 @@ async function reviewPlan(
     },
   });
 
+  signal.throwIfAborted();
+  const responses = state.responses.filter((response) => activeCouncilModels.some((model) => model.id === (response.requestedModel ?? response.model)));
   const successful = responses.filter((r) => r.status === "complete" && r.response);
   if (successful.length < args.minSuccessfulModels) {
     return {
@@ -726,28 +749,12 @@ async function reviewPlan(
     };
   }
 
-  // Estimate synthesis cost as a circuit breaker
-  const totalResponseChars = successful.reduce((sum, r) => sum + (r.response?.length ?? 0), 0);
-  const estimatedSynthesisInputTokens = Math.ceil((totalResponseChars + planContent.length + (contextString?.length ?? 0)) / 4);
-  const estimatedSynthesisOutputTokens = 4000; // typical Opus synthesis output
-  // Opus 4.6: $15/1M input, $75/1M output
-  const estimatedSynthesisCost =
-    (estimatedSynthesisInputTokens / 1_000_000) * 15 +
-    (estimatedSynthesisOutputTokens / 1_000_000) * 75;
-
-  if (estimatedSynthesisCost > args.maxCostPerPlan) {
-    return {
-      skipped: false,
-      error: `Projected Opus synthesis cost ($${estimatedSynthesisCost.toFixed(3)}) exceeds per-plan cap ($${args.maxCostPerPlan.toFixed(2)}). Raise --max-cost-per-plan or reduce plan/context size.`,
-    };
-  }
-
   const synthesisResponses = successful.map((r) => {
     const info = activeCouncilModels.find((m) => m.id === r.model);
     return {
       model: r.model,
       modelName: r.modelName,
-      family: info?.family ?? "unknown",
+      family: r.family ?? info?.family ?? "unknown",
       response: r.response!,
     };
   });
@@ -757,12 +764,12 @@ async function reviewPlan(
   // reviewer can verify ground-truth claims. Their findings join the council BEFORE
   // the judge. Each is hard-capped (B12); a member that abstains/fails is dropped.
   if (args.prismMode === "fusion" && args.fusionTwoStage && shouldRunAgentic(riskScore, args.fusionAgentic)) {
-    const agenticModels = activeCouncilModels.filter((m) => m.tier !== "free").slice(0, 2);
+    const agenticModels = activeCouncilModels.filter((m) => m.tier !== "free" && m.toolCallApi !== "responses" && m.supportedParameters?.includes("tools")).slice(0, 2);
     console.log(`  [agentic] HIGH risk + --agentic → running ${agenticModels.length} repo-aware member(s)`);
     for (const m of agenticModels) {
       try {
         const finding = await runAgenticMember({
-          openrouterKey, modelId: m.id, planContent, repoRoot: context.repoRoot,
+          openrouterKey, modelId: m.id, planContent, repoRoot: context.repoRoot, budget, signal, onUsage,
         });
         if (finding) {
           synthesisResponses.push({ model: `agentic:${m.id}`, modelName: `${m.name} (repo-aware)`, family: "agentic", response: finding });
@@ -795,7 +802,7 @@ async function reviewPlan(
         context: contextString,
         synthesisResponses,
         repoRoot: context.repoRoot,
-        synthesisPromptOverride,
+        synthesisPromptOverride, budget, signal, onRequestUsage: onUsage,
       });
       synthesis = fusionInfo.synthesis;
       console.log(`  [fusion] judge JSON → ${fusionInfo.judgeJsonRel} (evidence kept=${fusionInfo.evidenceKept} dropped=${fusionInfo.evidenceDropped}; citations dropped=${fusionInfo.citationsDropped}; sha=${fusionInfo.pinnedSha?.slice(0, 8) ?? "none"})`);
@@ -807,25 +814,25 @@ async function reviewPlan(
       console.error(`  [fusion] ALERT judge/synthesizer failed (${detail}) — falling back to legacy single-Opus merge (prism-fallback: legacy)`);
       synthesis = await synthesizeViaOpenRouter({
         openrouterKey, content: planContent, analysisPrompt: effectiveReviewPrompt,
-        responses: synthesisResponses, context: contextString, customSynthesisInstructions: synthesisPromptOverride,
+        responses: synthesisResponses, context: contextString, customSynthesisInstructions: synthesisPromptOverride, budget, signal, onUsage,
       });
     }
   } else {
-    console.log(`  Synthesizing with ${OPENROUTER_SYNTHESIS_MODEL_ID} (via OpenRouter)... (estimated cost: $${estimatedSynthesisCost.toFixed(3)})`);
+    console.log(`  Synthesizing with ${OPENROUTER_SYNTHESIS_MODEL_ID} (via OpenRouter)...`);
     synthesis = await synthesizeViaOpenRouter({
       openrouterKey, content: planContent, analysisPrompt: effectiveReviewPrompt,
-      responses: synthesisResponses, context: contextString, customSynthesisInstructions: synthesisPromptOverride,
+      responses: synthesisResponses, context: contextString, customSynthesisInstructions: synthesisPromptOverride, budget, signal, onUsage,
     });
   }
 
   const durationSec = Math.round((Date.now() - startTime) / 1000);
-  const totalInputTokens = responses.reduce((sum, r) => sum + (r.inputTokens ?? 0), 0);
-  const totalOutputTokens = responses.reduce((sum, r) => sum + (r.outputTokens ?? 0), 0);
+  const totalInputTokens = state.usage.reduce((sum, usage) => sum + usage.inputTokens, 0);
+  const totalOutputTokens = state.usage.reduce((sum, usage) => sum + usage.outputTokens, 0);
 
   const outputPath = writeReviewFile({
     planPath,
     planContent,
-    contentHash,
+    contentHash, reviewInputHash,
     contextRepo: context.repoName,
     contextBrief: context.brief,
     synthesis,
@@ -839,7 +846,7 @@ async function reviewPlan(
     prismMode: args.prismMode,
     prismFallback,
     riskScore,
-    fusion: fusionInfo,
+    fusion: fusionInfo, totalCost: budget.spent,
   });
 
   // Fusion run telemetry (Component E) — fallback-rate + cost-by-roster as a
@@ -921,7 +928,9 @@ function buildCouncil(
   if (!roster) {
     return { models: [], error: `--roster value '${rosterName}' is not valid. Choose from: ${Object.keys(ROSTERS).join(", ")}, auto` };
   }
-  const models = roster.filter((m) => !excludeSet.has(m.id));
+  const models = roster.filter((m) => !excludeSet.has(m.id)).map((model) => getModel(model.id)).filter((model): model is ModelInfo => Boolean(model));
+  const missingLive = roster.filter((model) => !excludeSet.has(model.id) && !getModel(model.id));
+  if (missingLive.length) return { models, error: "Models unavailable in live catalog: " + missingLive.map((model) => model.id).join(", ") };
   if (strictExclude && excludeSet.size > 0) {
     const missing = [...excludeSet].filter((id) => !roster.some((m) => m.id === id));
     if (missing.length > 0) {
@@ -959,8 +968,13 @@ async function main(): Promise<number> {
     // The ENTIRE pipeline — council fan-out, brief enhancement, AND synthesis —
     // now bills to OPENROUTER_API_KEY. The Anthropic API is never called directly,
     // so ANTHROPIC_API_KEY is no longer required for any step. (Enhancement uses
-    // anthropic/claude-sonnet-4-6 *via OpenRouter*; synthesis uses Opus via OpenRouter.)
+    // anthropic/claude-sonnet-5 *via OpenRouter*; synthesis uses Opus via OpenRouter.)
   }
+
+  const controller = new AbortController();
+  process.once("SIGINT", () => { console.error("Stopping; council checkpoints are preserved."); controller.abort(); });
+  const batchBudget = new RunBudget(args.maxCost);
+  if (!args.dryRun) await fetchModelCatalog(controller.signal);
 
   // Load custom prompt files if provided.
   const reviewPromptOverride = args.reviewPromptPath
@@ -1017,7 +1031,7 @@ async function main(): Promise<number> {
 
   const context = await buildLocalContext(repoRoot, {
     enhance: args.enhance && !args.dryRun,
-    openrouterKey,
+    openrouterKey, budget: batchBudget, signal: controller.signal,
   });
 
   console.log(`Context: ${context.tree.filter((f) => f.type === "file").length} files, ${Object.keys(context.keyFiles).length} key files`);
@@ -1033,6 +1047,7 @@ async function main(): Promise<number> {
   let failed = 0;
 
   for (const planPath of plans) {
+    if (controller.signal.aborted || batchBudget.remaining <= 0) { failed++; break; }
     const relPath = path.relative(process.cwd(), planPath);
     console.log(`\n▸ ${relPath}`);
 
@@ -1058,7 +1073,7 @@ async function main(): Promise<number> {
         openrouterKey,
         reviewPromptOverride,
         synthesisPromptOverride,
-        councilForPlan!,
+        councilForPlan!, batchBudget, controller.signal,
       );
       if (result.error) {
         console.log(`  ✗ Failed: ${result.error}`);
@@ -1082,6 +1097,7 @@ async function main(): Promise<number> {
   console.log(`\n${"─".repeat(50)}`);
   console.log(`Done: ${reviewed} reviewed, ${skipped} skipped, ${failed} failed`);
 
+  console.log(`Recorded batch spend: ${batchBudget.spent.toFixed(4)} / ${args.maxCost.toFixed(2)} (includes enhancement, retries, and reserved unknown charges)`);
   return failed > 0 ? 1 : 0;
 }
 

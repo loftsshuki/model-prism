@@ -37,11 +37,11 @@ describe("review analysis", () => {
     expect(items.some((item) => item.category === "risk")).toBe(true);
   });
 
-  test("scores review quality with risk and actionability signals", () => {
+  test("leaves legacy evidence and risk unscored", () => {
     const score = analyzeReviewQuality(synthesis);
 
-    expect(score.score).toBeGreaterThan(50);
-    expect(["Medium", "High"]).toContain(score.risk);
+    expect(score.score).toBeNull();
+    expect(score.risk).toBe("Unassessed");
     expect(score.actionability).not.toBe("Low");
     expect(score.reasons.length).toBeGreaterThan(0);
   });
