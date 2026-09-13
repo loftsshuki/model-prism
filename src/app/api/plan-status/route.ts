@@ -30,6 +30,7 @@ export async function POST(req: NextRequest) {
   if (!runId || !status) return NextResponse.json({ error: "Missing runId or status" }, { status: 400 });
 
   try {
+    if (!await getRun(runId, runOwner(req))) return NextResponse.json({ error: "Run not found" }, { status: 404 });
     await savePlanStatus(runId, status, approvedAt ?? null);
     return NextResponse.json({ ok: true });
   } catch (error) {
