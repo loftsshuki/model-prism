@@ -256,11 +256,14 @@ export async function synthesizeViaOpenRouter(opts: {
   retryOptions?: { maxAttempts?: number; baseDelayMs?: number };
   signal?: AbortSignal; budget?: RunBudget; onUsage?: (usage: ModelUsage) => void;
   reasoningEffort?: string; maxTokens?: number;
+  model?: import("./types").ModelInfo;
+  sources?: import("./review-policy").SourceDocument[];
 }): Promise<SynthesisResult> {
   const usage: ModelUsage[] = [];
   const prompt = buildSynthesisPrompt(opts.content, opts.analysisPrompt, opts.responses, opts.context, opts.customSynthesisInstructions)
-    + "\nRespond by calling the synthesis tool. Evidence source IDs are content, context, or model:<exact model ID>. Quote sources exactly. A model's agreement is not proof of correctness. Report unsupported concerns separately; do not invent citations. Return findings: [] when there are no concrete findings.";
-  const data = await requestCompletion({ apiKey: opts.openrouterKey, model: opts.modelId ?? OPENROUTER_SYNTHESIS_MODEL_ID,
+    + "\nRespond by calling the synthesis tool. Evidence source IDs are content, context, or model:<exact model ID>. Quote sources exactly. A model's agreement is not proof of correctness. Report unsupported concerns separately; do not invent citations. Return findings: [] when there are no concrete findings."
+    + (opts.sources?.length ? `\nYou may also cite these file source IDs for the supplied code/context: ${JSON.stringify(opts.sources.map(source => ({ id: source.id, path: source.path })))}. Prefer direct file evidence over quoting another reviewer.` : "");
+  const data = await requestCompletion({ apiKey: opts.openrouterKey, model: opts.model ?? opts.modelId ?? OPENROUTER_SYNTHESIS_MODEL_ID,
     messages: [{ role: "user", content: prompt }], maxTokens: opts.maxTokens ?? SYNTHESIS_MAX_TOKENS,
     tools: [{ type: "function", function: { name: "synthesis", description: "Output the structured synthesis with evidence", parameters: SynthesisJsonSchema } }],
     signal: opts.signal, budget: opts.budget, reasoningEffort: opts.reasoningEffort,
@@ -273,7 +276,7 @@ export async function synthesizeViaOpenRouter(opts: {
   if (!["stop", "tool_calls"].includes(choice?.finish_reason ?? "")) throw new Error("Synthesis did not finish. Resume to retry synthesis only.");
   const raw = choice?.message?.tool_calls?.find((call) => call.function.name === "synthesis")?.function.arguments;
   if (!raw) throw new Error("Synthesis returned no structured result. Council responses are saved; resume synthesis.");
-  const sources = { content: opts.content, context: opts.context ?? "", ...Object.fromEntries(opts.responses.map((r) => ["model:" + r.model, r.response])) };
+  const sources = { content: opts.content, context: opts.context ?? "", ...Object.fromEntries(opts.responses.map((r) => ["model:" + r.model, r.response])), ...Object.fromEntries((opts.sources ?? []).filter(source => source.id.startsWith("file:")).map(source => [source.id, source.text])) };
   try { return { ...validateSynthesis(JSON.parse(raw), sources), usage }; }
   catch { throw new Error("Synthesis returned invalid structured data. Council responses are saved; resume synthesis."); }
 }

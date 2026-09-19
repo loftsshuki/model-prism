@@ -1,155 +1,69 @@
 "use client";
 import Link from "next/link";
-
 import { useEffect, useState } from "react";
 import { authHeaders } from "@/lib/client-api";
-import type { ModelFailureDiagnostic, ModelValueRow, RosterRecommendation } from "@/lib/telemetry";
+import type { ModelFailureDiagnostic, ModelValueRow } from "@/lib/telemetry";
+import type { HumanModelQuality } from "@/lib/server/finding-store";
+import type { FreshnessReport } from "@/lib/server/freshness-store";
 
-interface TelemetryResponse {
-  telemetryPath: string;
-  runCount: number;
-  leaderboard: ModelValueRow[];
-  diagnostics: ModelFailureDiagnostic[];
-  recommendations: RosterRecommendation[];
-  error?: string;
-}
-
-function pct(value: number) {
-  return `${Math.round(value * 100)}%`;
-}
-
-function money(value: number | null) {
-  if (value === null) return "—";
-  return `$${value.toFixed(4)}`;
-}
+const money = (value: number | null) => value === null ? "—" : `$${value.toFixed(4)}`;
+type Telemetry = { runCount: number; leaderboard: ModelValueRow[]; diagnostics: ModelFailureDiagnostic[] };
 
 export default function ModelsPage() {
-  const [data, setData] = useState<TelemetryResponse | null>(null);
+  const [quality, setQuality] = useState<HumanModelQuality[]>([]);
+  const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
+  const [freshness, setFreshness] = useState<FreshnessReport | null>(null);
   const [loading, setLoading] = useState(true);
-
-  const load = async () => {
+  const [error, setError] = useState("");
+  const [freshnessError, setFreshnessError] = useState("");
+  const [loadedAt, setLoadedAt] = useState(0);
+  async function load() {
     setLoading(true);
-    try {
-      const res = await fetch("/api/telemetry", { headers: authHeaders() });
-      setData(await res.json());
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    queueMicrotask(() => { void load(); });
-  }, []);
-
-  return (
-    <main className="min-h-screen bg-cream text-ink px-6 py-8">
-      <div className="max-w-7xl mx-auto space-y-8">
-        <header className="flex items-start justify-between gap-4">
-          <div>
-            <Link href="/" className="text-xs uppercase tracking-[0.2em] text-grey-50 hover:text-grey-60">← Back</Link>
-            <h1 className="mt-4 text-3xl font-semibold tracking-tight">Model Intelligence</h1>
-            <p className="mt-2 text-sm text-grey-50">
-              Leaderboard, failure diagnostics, and roster recommendations from the local telemetry ledger.
-            </p>
-          </div>
-          <button onClick={load} className="rounded-lg border border-border px-4 py-2 text-sm text-grey-60 hover:border-green">
-            Refresh
-          </button>
-        </header>
-
-        {loading && <div className="rounded-xl border border-border bg-white p-6 text-grey-50">Loading telemetry…</div>}
-        {!loading && data?.error && <div className="rounded-xl border border-red-900 bg-red-950/40 p-6 text-red-300">{data.error}</div>}
-
-        {!loading && data && !data.error && (
-          <>
-            <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="rounded-xl border border-border bg-white p-5">
-                <p className="text-xs uppercase tracking-[0.18em] text-grey-50">Runs recorded</p>
-                <p className="mt-2 text-3xl font-semibold">{data.runCount}</p>
-              </div>
-              <div className="rounded-xl border border-border bg-white p-5 md:col-span-2">
-                <p className="text-xs uppercase tracking-[0.18em] text-grey-50">Telemetry path</p>
-                <p className="mt-2 text-sm text-grey-60 break-all">{data.telemetryPath}</p>
-              </div>
-            </section>
-
-            {data.runCount === 0 && (
-              <div className="rounded-xl border border-border bg-white p-6 text-grey-50">
-                No model telemetry yet. Run and synthesize a council review from the home page; Model Prism records one telemetry row after synthesis succeeds.
-              </div>
-            )}
-
-            {data.recommendations.length > 0 && (
-              <section className="space-y-3">
-                <h2 className="text-lg font-semibold">Roster Recommendations</h2>
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                  {data.recommendations.map((item) => (
-                    <div key={item.id} className="rounded-xl border border-border bg-white p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="font-medium text-ink">{item.modelName}</p>
-                        <span className="rounded-full bg-grey-5 px-2 py-1 text-[11px] uppercase tracking-wide text-grey-60">{item.type}</span>
-                      </div>
-                      <p className="mt-2 text-sm text-grey-50">{item.reason}</p>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {data.diagnostics.length > 0 && (
-              <section className="space-y-3">
-                <h2 className="text-lg font-semibold">Failure Diagnostics</h2>
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                  {data.diagnostics.map((item) => (
-                    <div key={item.id} className="rounded-xl border border-red-950 bg-red-950/20 p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="font-medium text-red-100">{item.name}</p>
-                        <span className="rounded-full bg-red-950 px-2 py-1 text-[11px] uppercase tracking-wide text-red-300">{item.severity}</span>
-                      </div>
-                      <p className="mt-2 text-sm text-red-200/70">{item.message}</p>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            <section className="space-y-3">
-              <h2 className="text-lg font-semibold">Leaderboard</h2>
-              <div className="overflow-x-auto rounded-xl border border-border bg-white">
-                <table className="w-full text-sm">
-                  <thead className="bg-cream/70 text-xs uppercase tracking-wide text-grey-50">
-                    <tr>
-                      <th className="px-4 py-3 text-left">Model</th>
-                      <th className="px-4 py-3 text-right">Value</th>
-                      <th className="px-4 py-3 text-right">Success</th>
-                      <th className="px-4 py-3 text-right">Unique/run</th>
-                      <th className="px-4 py-3 text-right">Coverage</th>
-                      <th className="px-4 py-3 text-right">Cost</th>
-                      <th className="px-4 py-3 text-left">Verdict</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-neutral-800">
-                    {data.leaderboard.map((row) => (
-                      <tr key={row.id} className="hover:bg-grey-5/40">
-                        <td className="px-4 py-3">
-                          <div className="font-medium text-ink">{row.name}</div>
-                          <div className="text-xs text-grey-50">{row.family} · {row.tier} · {row.appearances} runs</div>
-                        </td>
-                        <td className="px-4 py-3 text-right text-grey-60">{row.valueScore.toFixed(2)}</td>
-                        <td className="px-4 py-3 text-right text-grey-60">{pct(row.successRate)}</td>
-                        <td className="px-4 py-3 text-right text-grey-60">{row.uniquePerRun.toFixed(2)}</td>
-                        <td className="px-4 py-3 text-right text-grey-60">{row.themeAvg === null ? "—" : row.themeAvg.toFixed(2)}</td>
-                        <td className="px-4 py-3 text-right text-grey-60">{money(row.totalCost)}</td>
-                        <td className="px-4 py-3 text-grey-60">{row.verdict}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          </>
-        )}
-      </div>
-    </main>
-  );
+    const results = await Promise.allSettled([
+      fetch("/api/quality", { headers: authHeaders() }).then(async response => { const data = await response.json(); if (!response.ok) throw new Error(data.error ?? "Unable to load confirmed outcomes"); return data; }),
+      fetch("/api/telemetry", { headers: authHeaders() }).then(response => response.json()),
+      fetch("/api/model-health").then(response => response.json()),
+    ]);
+    const [outcomes, signals, health] = results;
+    if (outcomes.status === "fulfilled") { setQuality(outcomes.value.models ?? []); setError(""); }
+    else setError(outcomes.reason?.message ?? "Unable to load outcomes");
+    if (signals.status === "fulfilled") setTelemetry(signals.value);
+    if (health.status === "fulfilled") { setFreshness(health.value.report ?? null); setFreshnessError(health.value.error ?? ""); }
+    else setFreshnessError("The scheduled check status is unavailable");
+    setLoading(false);
+    setLoadedAt(Date.now());
+  }
+  useEffect(() => { queueMicrotask(() => { void load(); }); }, []);
+  const stale = freshness && loadedAt - Date.parse(freshness.checkedAt) > 36 * 60 * 60 * 1000;
+  return <main className="min-h-screen bg-cream text-ink px-4 sm:px-6 py-8">
+    <div className="max-w-6xl mx-auto space-y-7">
+      <header className="flex items-start justify-between gap-4">
+        <div><Link href="/" className="text-sm text-green underline">← Back</Link><h1 className="mt-4 font-display text-3xl">Model performance</h1><p className="mt-2 text-sm text-grey-50">Useful findings confirmed by you, alongside costs and reliability.</p></div>
+        <button disabled={loading} onClick={load} className="min-h-11 border border-border px-4 py-2 text-sm text-green">{loading ? "Loading…" : "Refresh"}</button>
+      </header>
+      <section className="border border-border bg-white p-5 space-y-3">
+        <h2 className="font-display text-xl">Daily model freshness</h2>
+        <p className="text-sm">{freshness ? `${freshness.configured} configured models · ${freshness.status === "failed" ? "Check failed" : freshness.status === "attention" ? "Changes need review" : "Metadata matches"} · ${new Date(freshness.checkedAt).toLocaleString()}` : freshnessError || "The first scheduled check has not been recorded yet."}</p>
+        {stale && <p role="status" className="text-sm text-amber-900">The scheduled check is overdue. Every new paid review still checks the live catalog before starting.</p>}
+        {freshness?.error && <p className="text-sm text-amber-900">{freshness.error}</p>}
+        {!!freshness?.findings.length && <ul className="space-y-2 text-xs">{freshness.findings.map((finding, index) => <li key={`${finding.id}:${index}`} className="break-words"><strong>{finding.kind}</strong> · {finding.id} · {finding.detail}</li>)}</ul>}
+        <p className="text-xs text-grey-50">Vercel checks daily. Live prices and capabilities are used for reviews; newly released model IDs require evaluation before joining a curated council.</p>
+      </section>
+      <section className="space-y-3">
+        <h2 className="font-display text-2xl">Confirmed outcomes</h2>
+        <p className="text-xs text-grey-50">Accepted and fixed findings count as useful. Only findings explicitly dismissed as false positives count as false positives. Attribution uses the synthesis’s listed supporters; this is observational feedback, not a controlled model benchmark.</p>
+        {error && <p role="status" className="border border-gold p-4 text-sm">{error}</p>}
+        {!loading && !error && !quality.length && <p className="border border-border bg-white p-5 text-sm">No confirmed outcomes yet. Open a saved review and record your finding decisions.</p>}
+        {!!quality.length && <div className="overflow-x-auto border border-border bg-white"><table className="w-full text-sm">
+          <thead className="bg-cream"><tr>{["Model", "Confirmed", "False positives", "Precision", "Recorded cost", "Cost / useful finding"].map(label => <th key={label} className="px-4 py-3 text-left whitespace-nowrap font-medium">{label}</th>)}</tr></thead>
+          <tbody>{quality.map(row => <tr key={row.model} className="border-t border-border"><td className="px-4 py-3 break-words min-w-44">{row.model}</td><td className="px-4 py-3">{row.confirmed}</td><td className="px-4 py-3">{row.falsePositives}</td><td className="px-4 py-3 whitespace-nowrap">{row.precision === null ? `Need ${Math.max(0, 5 - row.reviewed)} more decisions` : `${Math.round(row.precision * 100)}% (${row.reviewed})`}</td><td className="px-4 py-3">{money(row.cost)}</td><td className="px-4 py-3">{money(row.costPerConfirmed)}</td></tr>)}</tbody>
+        </table></div>}
+        <p className="text-xs text-grey-50">Precision appears after five judged findings. Spending includes failed attempts, synthesis, estimates, and unresolved reservations. Repeated occurrences of the same finding count once per project and model.</p>
+      </section>
+      {!!telemetry?.diagnostics?.length && <section className="space-y-3"><h2 className="font-display text-xl">Reliability concerns</h2><div className="grid gap-3 sm:grid-cols-2">{telemetry.diagnostics.map(item => <article key={item.id} className="border border-gold bg-white p-4"><h3 className="text-sm font-medium">{item.name}</h3><p className="text-sm mt-2 text-grey-60">{item.message}</p></article>)}</div></section>}
+      <details className="border border-border bg-white p-5"><summary className="cursor-pointer text-sm font-medium">Model-assessed signals · {telemetry?.runCount ?? 0} reviews</summary><p className="my-3 text-xs text-grey-50">Coverage and uniqueness were assigned by a synthesizer. They are useful diagnostics and do not establish correctness or determine your default council.</p>
+        <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr>{["Model", "Completed", "Unique / run", "Coverage", "Cost"].map(label => <th className="text-left p-3 whitespace-nowrap" key={label}>{label}</th>)}</tr></thead><tbody>{(telemetry?.leaderboard ?? []).map(row => <tr key={row.id} className="border-t border-border"><td className="p-3">{row.name}</td><td className="p-3">{Math.round(row.successRate * 100)}%</td><td className="p-3">{row.uniquePerRun.toFixed(2)}</td><td className="p-3">{row.themeAvg?.toFixed(2) ?? "—"}</td><td className="p-3">{money(row.totalCost)}</td></tr>)}</tbody></table></div>
+      </details>
+    </div>
+  </main>;
 }

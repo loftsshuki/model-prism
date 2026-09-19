@@ -12,6 +12,7 @@ export interface FanOutParams {
   apiKey: string;
   runId: string | null;
   maxTokens: number;
+  maxAttempts?: number;
   isAborted: () => boolean;
   signal?: AbortSignal;
   budget?: RunBudget;
@@ -34,6 +35,7 @@ async function invokeModel(model: ModelInfo, params: FanOutParams): Promise<Mode
   const call = async (target: ModelInfo) => {
     if (params.isAborted() || params.signal?.aborted) throw abortError();
     const data = await requestCompletion({ model: target, apiKey: params.apiKey, messages, maxTokens: params.maxTokens,
+      maxAttempts: params.maxAttempts,
       signal: params.signal, budget: params.budget, reasoningEffort: params.reasoningEffort,
       onUsage: (u) => { usage.push(u); params.onUsage?.(u); },
       onText: (text) => { result.response = text; update(); },

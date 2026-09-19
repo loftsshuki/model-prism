@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getRun, saveRunCheckpoint } from "@/lib/db";
-import { requireAdminToken, runOwner } from "@/lib/api-auth";
+import { requireAdminToken, requestOwner, sameOrigin } from "@/lib/api-auth";
+import { recoverStalledReview } from "@/lib/server/background-store";
 import { CheckpointSchema, type RunCheckpoint } from "@/lib/run-checkpoint";
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const unauthorized = requireAdminToken(req);
+  const unauthorized = requireAdminToken(req) ?? sameOrigin(req);
   if (unauthorized) return unauthorized;
-  const owner = runOwner(req);
+  const owner = await requestOwner(req);
   if (!owner) return NextResponse.json({ error: "Connect your OpenRouter key to enable private cloud checkpoints" }, { status: 401 });
   const { id } = await params;
   const body = await req.text();
@@ -29,7 +30,12 @@ export async function GET(
   if (unauthorized) return unauthorized;
 
   const { id } = await params;
-  const run = await getRun(id, runOwner(req));
+  const owner = await requestOwner(req);
+  let run = await getRun(id, owner);
+  if (run?.snapshot?.background && owner) {
+    await recoverStalledReview(id, owner);
+    run = await getRun(id, owner);
+  }
 
   if (!run) {
     return NextResponse.json({ error: "Run not found" }, { status: 404 });

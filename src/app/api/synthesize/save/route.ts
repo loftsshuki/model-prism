@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getRun, saveSynthesis, updateRunCost } from "@/lib/db";
-import { requireAdminToken, runOwner } from "@/lib/api-auth";
+import { requireAdminToken, requestOwner, sameOrigin } from "@/lib/api-auth";
 
 export async function POST(req: NextRequest) {
-  const unauthorized = requireAdminToken(req);
+  const unauthorized = requireAdminToken(req) ?? sameOrigin(req);
   if (unauthorized) return unauthorized;
 
   const { runId, result, modelUsed } = await req.json();
@@ -13,7 +13,9 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    if (!await getRun(runId, runOwner(req))) return NextResponse.json({ error: "Run not found" }, { status: 404 });
+    const run = await getRun(runId, await requestOwner(req));
+    if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
+    if (run.snapshot?.background) return NextResponse.json({ error: "Background reviews are saved by the worker" }, { status: 409 });
     await saveSynthesis(runId, result, modelUsed);
     await updateRunCost(runId, 0);
     return NextResponse.json({ ok: true });

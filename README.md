@@ -15,7 +15,8 @@ It is used both as:
 - Provides run presets for common review modes
 - Measures traceable evidence coverage and extracts copyable action checklists (no invented accuracy score)
 - Supports a second-pass critique of the synthesis
-- Records database-backed telemetry for a model leaderboard, failure diagnostics, and roster recommendations
+- Tracks accepted, dismissed, and fixed findings across reviews, with exact file/line citations where supplied evidence permits
+- Reports human-confirmed findings, explicit false positives, cost per useful finding, and separate model-assessed diagnostics
 - Provides context-pack templates and local file/folder context
 - Loads GitHub PR diffs into the code-review flow and exports GitHub-ready review markdown
 - Adds database-backed plan approval status/frontmatter and a live hook dashboard
@@ -26,12 +27,19 @@ It is used both as:
 - Supports GitHub Context Packs for read-only codebase context
 - Exports prior runs as Markdown
 - Provides CLI plan review with cost/quorum safeguards
+- Runs durable background reviews that continue when a tab closes, with a database-enforced spending ledger and explicit stop/resume
+- Offers an opt-in adaptive council: three initial reviewers, escalation for unresolved concerns, and a full council for high-risk work
+- Checks model freshness daily on Vercel, independently of GitHub Actions
+
+Live app: [model-prism.vercel.app](https://model-prism.vercel.app).
+
+Account sign-in is awaiting the deployment owner's Clerk setup. Until activated, private history still uses the existing capability derived from the OpenRouter key; rotating that key does not yet migrate history. Legacy unowned records are retained in the database but are no longer accessible anonymously. See [release notes](docs/UPGRADE-2026-09-19.md).
 
 ## Quick start
 
 ```bash
 cd C:/Dev/Tools/model-prism
-npm install
+npm ci
 npm run dev
 ```
 
@@ -45,6 +53,8 @@ http://localhost:3000
 
 Connect your key in the app or Settings. OpenRouter keys are session-only unless you choose Remember on this device (unencrypted localStorage).
 
+Background reviews temporarily encrypt the key on the server with AES-256-GCM, bound to the review owner and execution. The key is omitted from workflow inputs, outputs, and saved results. It is cleared when a run ends; expired keys are unusable after 24 hours and are removed by the daily cleanup. Browser-only review remains available.
+
 - OpenRouter API key: used for council, synthesis, judge, and brief enhancement. A second provider key is unnecessary.
 - GitHub PAT: optional, used for private-repo Context Packs
 - Admin token: optional, only needed when `MODEL_PRISM_ADMIN_TOKEN` is set on the server
@@ -55,6 +65,8 @@ Server-side storage uses Neon/Postgres:
 
 ```env
 DATABASE_URL=postgres://...
+MODEL_PRISM_ENCRYPTION_KEY=<64 hexadecimal characters from a cryptographic random generator>
+CRON_SECRET=<a separate random secret>
 ```
 
 Optional API protection for history/save routes:
@@ -70,6 +82,9 @@ When `MODEL_PRISM_ADMIN_TOKEN` is set, users must enter the same value in Settin
 ```bash
 npm run dev           # Next dev server
 npm run build         # Production build
+npm run verify        # Lint, unit tests, production dependency audit, build
+npm run verify:database # Real database concurrency/ownership checks; removes synthetic records
+npm run verify:workflow # Local mobile browser -> durable workflow -> database; mock provider, no model spend
 npm run lint          # ESLint
 npm test              # Bun unit tests via Windows-safe wrapper
 npm run review        # CLI plan review
@@ -79,6 +94,19 @@ npm run test:browser  # Browser regressions (after npm run build)
 npm run evaluate      # Describe opt-in evaluation fixtures
 npm run model-value   # Model value/telemetry analysis
 ```
+
+Use npm and `package-lock.json` to install dependencies. Bun is only the test runner. The old Bun lockfile was removed because the installed Bun version ignores the scoped dependency overrides needed for patched Workflow dependencies. A clean Linux `npm ci` is verified alongside Windows development.
+
+Vercel runs `npm run verify` before deployment. Its daily authenticated cron checks availability, price/capability drift, and newer-model candidates; results appear on **Models**. It never silently changes the curated model IDs. The existing GitHub CI and freshness workflow remain available when GitHub account billing permits them to run.
+
+The evaluation suite has 20 scoped cases: 16 pinned excerpts from this repository's actual before/after fixes and four controls. Run a bounded individual evaluation or compare fixed/adaptive councils:
+
+```bash
+npm run evaluate -- --live --models google/gemini-3.5-flash-lite --limit 2 --max-cost 0.05 --out evaluation.json
+npm run evaluate -- --live --mode compare --roster balanced --max-cost 2 --out council-comparison.json
+```
+
+Reports include precision, recall, false positives, invalid/incomplete outputs, latency, and cost per supported finding. An explicit spending limit is required. This scoped regression suite does not establish general model quality; confirmed feedback from real project reviews remains essential. No adaptive council replaces the fixed default without a completed benchmark.
 
 If Bun resolution fails, set:
 
@@ -173,23 +201,25 @@ docs/OPERATIONS.md
 
 ## Security notes
 
-- Do not deploy publicly without setting `MODEL_PRISM_ADMIN_TOKEN` if run history is sensitive.
+- Private history, findings, telemetry, and hook jobs require an owner capability. `MODEL_PRISM_ADMIN_TOKEN` can add a deployment-wide access restriction.
 - Browser-stored keys are convenient for local/internal use, but they are not ideal for multi-user public deployments.
 - Context Packs intentionally block common credential files and secret-looking contents.
 - The legacy server-side routes remain for compatibility but should be removed once confirmed unused.
 
 ## Freshness, resumption, and spending
 
-The reviewed catalog snapshot was refreshed on 2026-09-13. Browser runs and the CLI verify live availability before paid execution. The daily GitHub check covers all council, synthesis/judge, enhancement, and fallback IDs; price and capability changes are reported separately from advisory successor candidates. It does not replace a working model automatically. GitHub may disable schedules on inactive public repositories; CI and run preflight provide additional checks.
+The reviewed catalog snapshot was refreshed on 2026-09-19. Browser runs, background jobs, and the CLI verify live availability before paid execution. Daily Vercel and GitHub checks cover all council, synthesis/judge, enhancement, and fallback IDs; price and capability changes are reported separately from advisory successor candidates. They do not replace a working model automatically. Vercel's independent check continues if GitHub Actions is unavailable.
 
-Completed answers persist in IndexedDB and in private cloud checkpoints. Reopen the app and choose Restore, or Resume from History. Changing content, instructions, context, or reasoning creates a new run. Increasing the output budget retries incomplete answers; completed answers are retained. Closing the tab interrupts browser execution; resumption requires reopening it. These are checkpoints, not background workers.
+Completed answers persist in private cloud checkpoints, with local checkpoints for browser execution. Reopen the app and choose Restore, or Resume from History. Changing content, instructions, context, reasoning, or project creates a new run. Increasing the output budget retries incomplete answers; completed answers are retained. Background reviews continue after closing the tab. Browser-only reviews require reopening the app to resume interrupted work.
 
-New cloud checkpoints are scoped to a capability derived from the OpenRouter key; the provider key is not sent to the persistence server. Connecting the same key on another device restores access. Treat this capability like a password. Existing legacy records retain their prior access rules; set MODEL_PRISM_ADMIN_TOKEN to restrict those routes. Rotating a provider key changes the derived cloud identity, so export reviews before changing keys if you need to retain portable access.
+Cloud checkpoints are scoped to a capability derived from the OpenRouter key. Background execution temporarily stores a separately encrypted provider key as described above. Connecting the same key on another device restores access. Treat the capability like a password. Unowned legacy records are retained but hidden until ownership can be verified. Rotating a provider key changes the derived cloud identity, so export reviews before changing keys until account migration is available.
 
-Spending records prefer provider-reported usage.cost. Where absent, the app labels estimates; interrupted requests with unknown charges retain a conservative request reservation. Every retry has its own entry, including failed synthesis or judge attempts. Concurrent requests reserve their ceilings before dispatch. Stop cancels queued work, request streams, and retry waits; providers may continue billing an already accepted request briefly. Budgets apply to one active execution; avoid resuming the same checkpoint simultaneously on multiple devices.
+External hook workers must send `x-model-prism-owner` on jobs, telemetry, and run requests. Its value is lowercase hexadecimal SHA-256 of the UTF-8 string `model-prism-cloud-v1:` followed by the OpenRouter key (with no whitespace or newline). This matches the browser's private history identity without putting the provider key in persistence headers. If configured, also send `x-model-prism-token` containing the deployment's admin token. Keep both capabilities secret.
+
+Spending records prefer provider-reported `usage.cost`. Where absent, the app labels estimates; interrupted requests with unknown charges retain a conservative request reservation. Every retry has its own entry, including failed synthesis or judge attempts. Concurrent requests reserve their ceilings before dispatch. Stop cancels queued work, request streams, and retry waits; providers may continue billing an already accepted request briefly. Background budgets apply cumulatively to the saved review, including resumes, and database locks coordinate multiple devices. Browser-only executions use a local ledger; avoid running the same browser checkpoint simultaneously on multiple devices.
 
 The CLI stores an adjacent .state.json checkpoint, resumes matching inputs, and preserves partial results when synthesis fails. --force explicitly starts a fresh council. --max-cost limits the batch including shared context enhancement; --max-cost-per-plan limits each plan. Enhancement is cached by source content and model to avoid charging again for an unchanged brief.
 
 ## Model evaluation
 
-Run npm run evaluate -- --live --max-cost 0.50 --out evaluation.json to compare the balanced council on three small code fixtures. This costs OpenRouter credits and requires OPENROUTER_API_KEY. Results include exact outputs, completion status, latency, and the full spending ledger. These fixtures detect obvious regressions; use representative project reviews before changing the curated roster. No general quality ranking is inferred from model price, release date, or agreement.
+Run `npm run evaluate` for a free dry run of the 20-case repository regression dataset. To compare fixed and adaptive councils, use `npm run evaluate -- --live --mode compare --max-cost 0.50 --out evaluation.json`. Live evaluation costs OpenRouter credits and requires `OPENROUTER_API_KEY`; the shared limit can stop before every case runs. Reports include precision/recall against case-specific ground truth, exact outputs, completion status, latency, and the full spending ledger. These fixtures detect scoped regressions; use representative project reviews before changing the curated roster. No general quality ranking is inferred from model price, release date, or agreement.

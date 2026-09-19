@@ -13,6 +13,7 @@ interface RunSummary {
   created_at: string;
   response_count: number;
   has_synthesis: number;
+  background?: { state: string; phase: string };
 }
 
 function formatDate(raw: string) {
@@ -66,6 +67,7 @@ export default function HistoryPage() {
       </header>
 
       <div className="max-w-4xl mx-auto px-6 py-8">
+        <p className="mb-5 text-sm text-grey-50">Use the same OpenRouter key on another device to access these private reviews. Key rotation does not yet carry history over.</p>
         <div className="flex items-center gap-3 mb-6">
           <div className="w-8 h-px bg-green" />
           <span className="overline text-green">Past Runs</span>
@@ -99,6 +101,7 @@ export default function HistoryPage() {
                     </p>
                   </div>
                   <div className="flex items-center gap-4 ml-4 shrink-0">
+                    {run.background && <span className="text-xs text-green">{run.background.state}</span>}
                     <span className="text-[10px] tracking-wide uppercase text-grey-40">{run.response_count} models</span>
                     {run.context_metadata && (() => {
                       try {

@@ -7,3 +7,5 @@ test-results
 playwright-report
 docs/plans/reviews
 *.tsbuildinfo
+.workflow-data
+tests/fixtures

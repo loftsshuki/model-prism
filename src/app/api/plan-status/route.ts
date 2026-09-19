@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdminToken, runOwner } from "@/lib/api-auth";
+import { requireAdminToken, requestOwner, sameOrigin } from "@/lib/api-auth";
 import { getRun, getPlanStatus, savePlanStatus } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
   if (!runId) return NextResponse.json({ error: "Missing runId" }, { status: 400 });
 
   try {
-    if (!await getRun(runId, runOwner(req))) return NextResponse.json({ error: "Run not found" }, { status: 404 });
+    if (!await getRun(runId, await requestOwner(req))) return NextResponse.json({ error: "Run not found" }, { status: 404 });
     const row = await getPlanStatus(runId);
     return NextResponse.json({ status: row?.status ?? "council-reviewed", approvedAt: row?.approved_at ?? null });
   } catch (error) {
@@ -22,14 +22,14 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const unauthorized = requireAdminToken(req);
+  const unauthorized = requireAdminToken(req) ?? sameOrigin(req);
   if (unauthorized) return unauthorized;
 
   const { runId, status, approvedAt } = await req.json();
   if (!runId || !status) return NextResponse.json({ error: "Missing runId or status" }, { status: 400 });
 
   try {
-    if (!await getRun(runId, runOwner(req))) return NextResponse.json({ error: "Run not found" }, { status: 404 });
+    if (!await getRun(runId, await requestOwner(req))) return NextResponse.json({ error: "Run not found" }, { status: 404 });
     await savePlanStatus(runId, status, approvedAt ?? null);
     return NextResponse.json({ ok: true });
   } catch (error) {

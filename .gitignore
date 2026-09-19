@@ -54,3 +54,6 @@ next-env.d.ts
 *.review.md.state.json.tmp
 /test-results/
 /playwright-report/
+/.workflow-data/
+/.swc
+/bun.lock
