@@ -15,7 +15,8 @@ export default function RootLayout({
 }>) {
   const enabled = Boolean(process.env.CLERK_SECRET_KEY && process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
   const live = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY?.startsWith("pk_live_");
-  const content = enabled ? <ClerkProvider signInUrl="/sign-in" signUpUrl="/sign-up" signInFallbackRedirectUrl="/" signUpFallbackRedirectUrl="/settings" afterSignOutUrl="/" proxyUrl={live ? "/__clerk" : undefined}>
+  const content = enabled ? <ClerkProvider signInUrl="/sign-in" signUpUrl="/sign-up" signInFallbackRedirectUrl="/" signUpFallbackRedirectUrl="/settings" afterSignOutUrl="/" proxyUrl={live ? "/__clerk" : undefined}
+    localization={{ signIn: { start: { title: "Sign in to Model Prism" } }, signUp: { start: { title: "Create your Model Prism account" } } }}>
     <AccountSession>{children}</AccountSession>
   </ClerkProvider> : children;
   return (

@@ -36,3 +36,5 @@ Recovery moves only selected unowned reviews and their associated unowned hook r
 ## Verification
 
 `npm run verify:accounts` exercises real database import transactions using synthetic records: competing account claims, active-job protection, retained decisions, capability revocation, repeated imports, and dry-run/selected unowned recovery. It removes its fixtures afterward. Clerk browser verification uses temporary accounts and real sessions, with no model requests or outbound verification email required.
+
+The account release passed 144 unit tests, all eight desktop/mobile browser tests, real Neon account and background-job checks, and the complete local durable-workflow check. The protected HTTPS preview passed real Clerk sign-in with two independent accounts, UI history import, key rotation, old-capability revocation, wrong-account isolation, cross-origin rejection, multi-tab sign-out cleanup, and phone-sized sign-in/sign-up screens. Synthetic accounts and records were removed afterward. Vercel's production verification build and SonarCloud passed; GitHub Actions remains blocked by the existing GitHub account billing lock.
