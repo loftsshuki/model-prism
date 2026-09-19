@@ -131,10 +131,10 @@ export async function getCacheEntryCount(): Promise<number> {
   }
 }
 
-export async function clearAllCache(): Promise<void> {
+export async function clearAllCache(strict = false): Promise<void> {
   try {
     await clear(cacheStore);
-  } catch {
-    // Non-fatal
+  } catch (error) {
+    if (strict) throw error;
   }
 }

@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { useEffect, useState } from "react";
 import { authHeaders } from "@/lib/client-api";
+import { useAccount } from "@/components/account-session";
 
 interface RunSummary {
   id: string;
@@ -31,6 +32,7 @@ function formatDate(raw: string) {
 }
 
 export default function HistoryPage() {
+  const { userId } = useAccount();
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -67,7 +69,7 @@ export default function HistoryPage() {
       </header>
 
       <div className="max-w-4xl mx-auto px-6 py-8">
-        <p className="mb-5 text-sm text-grey-50">Use the same OpenRouter key on another device to access these private reviews. Key rotation does not yet carry history over.</p>
+        <p className="mb-5 text-sm text-grey-50">{userId ? "These reviews belong to your account. Sign in on another device to access them. Import previous key-based reviews from Settings." : "Connect the same OpenRouter key to view previous private reviews, or sign in and import them from Settings to keep access after changing keys."}</p>
         <div className="flex items-center gap-3 mb-6">
           <div className="w-8 h-px bg-green" />
           <span className="overline text-green">Past Runs</span>

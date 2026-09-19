@@ -30,6 +30,7 @@ export function useReviewRun() {
     if (snapshot.background) return;
     pending.current.set(snapshot.id, snapshot);
     saving.current = saving.current.then(async () => {
+      if (!mounted.current) return;
       const latest = pending.current.get(snapshot.id);
       if (!latest) return;
       pending.current.delete(snapshot.id);
