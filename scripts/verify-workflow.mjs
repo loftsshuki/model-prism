@@ -8,13 +8,13 @@ import { neon } from '@neondatabase/serverless';
 if (existsSync('.env.local')) process.loadEnvFile('.env.local');
 if (!process.env.DATABASE_URL || !process.env.MODEL_PRISM_ENCRYPTION_KEY) throw new Error('Configure DATABASE_URL and MODEL_PRISM_ENCRYPTION_KEY for local workflow verification');
 mkdirSync('.model-prism', { recursive: true });
-const port = 3112, base = `http://127.0.0.1:${port}`;
+const port = 3112, base = `http://localhost:${port}`;
 const providerKey = `sk-or-verification-${randomUUID()}`;
 const capability = createHash('sha256').update('model-prism-cloud-v1:' + providerKey).digest('hex');
 const owner = createHash('sha256').update(capability).digest('hex');
 const log = '.model-prism/workflow-verification.log'; writeFileSync(log, '');
 const preload = pathToFileURL(fileURLToPath(new URL('../tests/fixtures/provider-preload.mjs', import.meta.url))).href;
-const server = spawn(process.execPath, ['--import', preload, 'node_modules/next/dist/bin/next', 'start', '--hostname', '127.0.0.1', '--port', String(port)], {
+const server = spawn(process.execPath, ['--import', preload, 'node_modules/next/dist/bin/next', 'start', '--hostname', 'localhost', '--port', String(port)], {
   env: { ...process.env, VERCEL: '', WORKFLOW_TARGET_WORLD: 'local', WORKFLOW_LOCAL_BASE_URL: base, WORKFLOW_LOCAL_DATA_DIR: '.model-prism/workflow-verification-data', WORKFLOW_LOCAL_RECOVER_ACTIVE_RUNS: 'false' }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 server.stdout.on('data', chunk => appendFileSync(log, chunk)); server.stderr.on('data', chunk => appendFileSync(log, chunk));
 const sql = neon(process.env.DATABASE_URL);

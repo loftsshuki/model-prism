@@ -56,11 +56,12 @@ function openCheckpoints(): Promise<IDBDatabase> {
   });
 }
 export async function saveLocalCheckpoint(run: RunCheckpoint) {
+  const localOwner = sessionStorage.getItem("model-prism-session-scope") || "guest";
   const db = await openCheckpoints();
   try {
     await new Promise<void>((resolve, reject) => {
       const transaction = db.transaction("runs", "readwrite");
-      transaction.objectStore("runs").put(run);
+      transaction.objectStore("runs").put({ ...run, localOwner });
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error);
       transaction.onabort = () => reject(transaction.error);
@@ -68,16 +69,29 @@ export async function saveLocalCheckpoint(run: RunCheckpoint) {
   } finally { db.close(); }
 }
 export async function loadLocalCheckpoint(id?: string): Promise<RunCheckpoint | null> {
+  const localOwner = sessionStorage.getItem("model-prism-session-scope") || "guest";
   const db = await openCheckpoints();
   try {
     return await new Promise((resolve, reject) => {
       const request = db.transaction("runs").objectStore("runs").getAll();
       request.onsuccess = () => {
-        const candidates = (request.result as RunCheckpoint[]).filter((run) => !id || run.id === id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        const candidates = (request.result as Array<RunCheckpoint & { localOwner?: string }>).filter((run) => (run.localOwner ?? "guest") === localOwner && (!id || run.id === id)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
         const result = candidates.find((run) => CheckpointSchema.safeParse(run).success);
         resolve(result ?? null);
       };
       request.onerror = () => reject(request.error);
+    });
+  } finally { db.close(); }
+}
+export async function clearLocalCheckpoints() {
+  const db = await openCheckpoints();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction("runs", "readwrite");
+      transaction.objectStore("runs").clear();
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
     });
   } finally { db.close(); }
 }

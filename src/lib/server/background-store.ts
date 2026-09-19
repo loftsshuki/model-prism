@@ -100,6 +100,8 @@ export async function startBackgroundReview(input: BackgroundReviewInput, owner:
   const models = input.modelIds.map(id => catalog.find(model => model.id === id));
   if (models.some(model => !model) || !catalog.some(model => model.id === input.synthesisModel && model.toolCallApi !== "responses" && model.supportedParameters?.includes("tools"))) throw new ReviewConflict("Refresh the catalog and choose available reviewers and a tool-capable synthesizer");
   return transaction(async client => {
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 3))", [owner]);
+    if ((await client.query("SELECT 1 FROM account_history_imports WHERE legacy_owner=$1", [owner])).rows.length) throw new ReviewConflict("Sign in to the account that imported this key's history");
     await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 2))", [owner + submissionId]);
     const submitted = await client.query("SELECT run_id,execution,request_hash FROM review_submissions WHERE owner_key=$1 AND submission_id=$2", [owner, submissionId]);
     if (submitted.rows[0]) {

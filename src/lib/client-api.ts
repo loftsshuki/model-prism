@@ -3,7 +3,8 @@ export async function prepareCloudAccess(apiKey: string) {
   if (!apiKey) { sessionStorage.removeItem("model-prism-cloud-access"); localStorage.removeItem("model-prism-cloud-access"); return; }
   // A domain-separated, high-entropy capability for private history access.
   // Background jobs separately encrypt the provider key for temporary execution.
-  // The same key can restore history on a phone until account sign-in is available.
+  // Signed-in requests use the account; this capability is only for legacy
+  // access and the explicit history import, and is revoked after import.
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`model-prism-cloud-v1:${apiKey}`));
   const token = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   sessionStorage.setItem("model-prism-cloud-access", token);

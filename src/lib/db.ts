@@ -46,6 +46,9 @@ async function initializeDb() {
   await sql`ALTER TABLE runs ADD COLUMN IF NOT EXISTS snapshot JSONB`;
   await sql`ALTER TABLE runs ADD COLUMN IF NOT EXISTS snapshot_revision INTEGER DEFAULT 0`;
   await sql`ALTER TABLE runs ADD COLUMN IF NOT EXISTS owner_key TEXT`;
+  await sql`CREATE TABLE IF NOT EXISTS account_history_imports (
+    legacy_owner TEXT PRIMARY KEY, account_owner TEXT NOT NULL,
+    imported_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS responses (

@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { prepareCloudAccess } from "@/lib/client-api";
+import { AccountSettings } from "@/components/account-settings";
 
 import { useState, useEffect, useCallback } from "react";
 import { DEFAULT_TEMPLATES, PromptTemplate } from "@/lib/prompts";
@@ -163,6 +164,7 @@ export default function SettingsPage() {
       </header>
 
       <div className="max-w-2xl mx-auto p-6 space-y-8">
+        <AccountSettings />
         {/* API Keys */}
         <section className="space-y-4">
           <h2 className="text-sm font-semibold text-grey-60">API Keys</h2>

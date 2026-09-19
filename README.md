@@ -33,7 +33,7 @@ It is used both as:
 
 Live app: [model-prism.vercel.app](https://model-prism.vercel.app).
 
-Account sign-in is awaiting the deployment owner's Clerk setup. Until activated, private history still uses the existing capability derived from the OpenRouter key; rotating that key does not yet migrate history. Legacy unowned records are retained in the database but are no longer accessible anonymously. See [release notes](docs/UPGRADE-2026-09-19.md).
+Clerk accounts keep private history independent of your OpenRouter key. Sign in, then use **Settings → Check previous key history → Import into this account** to move reviews saved with your old key. Imports preserve decisions and revoke access through the old capability. Legacy unowned records require selected, operator-verified recovery; they are never assigned to the first person who signs in. See [account setup and recovery](docs/ACCOUNTS.md).
 
 ## Quick start
 
@@ -201,7 +201,7 @@ docs/OPERATIONS.md
 
 ## Security notes
 
-- Private history, findings, telemetry, and hook jobs require an owner capability. `MODEL_PRISM_ADMIN_TOKEN` can add a deployment-wide access restriction.
+- Private history, findings, telemetry, and hook jobs require a verified account session or an unclaimed legacy capability. `MODEL_PRISM_ADMIN_TOKEN` can add a deployment-wide access restriction.
 - Browser-stored keys are convenient for local/internal use, but they are not ideal for multi-user public deployments.
 - Context Packs intentionally block common credential files and secret-looking contents.
 - The legacy server-side routes remain for compatibility but should be removed once confirmed unused.
@@ -212,7 +212,7 @@ The reviewed catalog snapshot was refreshed on 2026-09-19. Browser runs, backgro
 
 Completed answers persist in private cloud checkpoints, with local checkpoints for browser execution. Reopen the app and choose Restore, or Resume from History. Changing content, instructions, context, reasoning, or project creates a new run. Increasing the output budget retries incomplete answers; completed answers are retained. Background reviews continue after closing the tab. Browser-only reviews require reopening the app to resume interrupted work.
 
-Cloud checkpoints are scoped to a capability derived from the OpenRouter key. Background execution temporarily stores a separately encrypted provider key as described above. Connecting the same key on another device restores access. Treat the capability like a password. Unowned legacy records are retained but hidden until ownership can be verified. Rotating a provider key changes the derived cloud identity, so export reviews before changing keys until account migration is available.
+Signed-in checkpoints belong to a stable Clerk account; changing provider keys does not change access to that history. Signed-out compatibility access uses the capability derived from the OpenRouter key until it is imported in Settings. Treat that capability like a password. Background execution temporarily stores a separately encrypted provider key as described above. Unowned legacy records remain hidden until an operator verifies ownership and recovers selected records. Signing out clears provider keys and cached review/source data from this device.
 
 External hook workers must send `x-model-prism-owner` on jobs, telemetry, and run requests. Its value is lowercase hexadecimal SHA-256 of the UTF-8 string `model-prism-cloud-v1:` followed by the OpenRouter key (with no whitespace or newline). This matches the browser's private history identity without putting the provider key in persistence headers. If configured, also send `x-model-prism-token` containing the deployment's admin token. Keep both capabilities secret.
 

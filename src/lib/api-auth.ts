@@ -1,15 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash, timingSafeEqual } from "node:crypto";
+import { accountOwner } from "./account-identity";
 
 export function runOwner(req: NextRequest): string | null {
   const token = req.headers.get("x-model-prism-owner") ?? "";
   return /^[a-f0-9]{64}$/.test(token) ? createHash("sha256").update(token).digest("hex") : null;
 }
 
-// Kept separate from the legacy capability decoder so account sessions can own
-// records without tying their identity to a provider credential.
+export async function signedInOwner(): Promise<string | null> {
+  if (!process.env.CLERK_SECRET_KEY || !process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) return null;
+  const { auth } = await import("@clerk/nextjs/server");
+  const { userId } = await auth();
+  return userId ? accountOwner(userId) : null;
+}
+
 export async function requestOwner(req: NextRequest): Promise<string | null> {
-  return runOwner(req);
+  const account = await signedInOwner();
+  if (account) return account;
+  const legacy = runOwner(req);
+  if (!legacy) return null;
+  const { legacyOwnerIsClaimed } = await import("./server/account-store");
+  return await legacyOwnerIsClaimed(legacy) ? null : legacy;
 }
 
 export function sameOrigin(req: NextRequest) {
