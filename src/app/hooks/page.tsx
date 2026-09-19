@@ -101,7 +101,11 @@ export default function HooksDashboardPage() {
 
             <section className="rounded-xl border border-border bg-white p-5 space-y-3">
               <h2 className="text-lg font-semibold">Hook worker contract</h2>
+              <p className="text-sm text-grey-50">Jobs and telemetry belong to your connected key. Workers must send the same private access header to write jobs you can see here. See the README for generating it; treat it as a secret.</p>
               <pre className="overflow-x-auto rounded-lg bg-cream p-4 text-xs text-grey-50">{`POST /api/hook-jobs
+Content-Type: application/json
+x-model-prism-owner: <private access capability>
+
 {
   "id": "plan-file-hash-or-job-id",
   "planFile": "docs/plans/my-plan.md",

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "node:crypto";
-import { requireAdminToken, runOwner } from "@/lib/api-auth";
+import { requireAdminToken, requestOwner, sameOrigin } from "@/lib/api-auth";
 import { listRunTelemetry, saveRunTelemetry } from "@/lib/db";
 import {
   aggregateModelValue,
@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
   if (unauthorized) return unauthorized;
 
   try {
-    const runs = parseTelemetryRows(await listRunTelemetry(500, runOwner(req)));
+    const runs = parseTelemetryRows(await listRunTelemetry(500, await requestOwner(req)));
     const leaderboard = aggregateModelValue(runs);
     return NextResponse.json({
       telemetryPath: "database:run_telemetry",
@@ -53,8 +53,10 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const unauthorized = requireAdminToken(req);
+  const unauthorized = requireAdminToken(req) ?? sameOrigin(req);
   if (unauthorized) return unauthorized;
+  const owner = await requestOwner(req);
+  if (!owner) return NextResponse.json({ error: "Private review access required" }, { status: 401 });
 
   const body = await req.json() as {
     content?: string;
@@ -87,7 +89,7 @@ export async function POST(req: NextRequest) {
   });
 
   try {
-    await saveRunTelemetry(JSON.stringify(record));
+    await saveRunTelemetry(JSON.stringify(record), owner);
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Failed to save telemetry" }, { status: 500 });

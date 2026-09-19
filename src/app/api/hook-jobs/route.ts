@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAdminToken } from "@/lib/api-auth";
+import { requireAdminToken, requestOwner, sameOrigin } from "@/lib/api-auth";
 import { listHookJobs, upsertHookJob } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -10,7 +10,7 @@ export async function GET(req: NextRequest) {
   if (unauthorized) return unauthorized;
 
   try {
-    const jobs = await listHookJobs();
+    const jobs = await listHookJobs(100, await requestOwner(req));
     return NextResponse.json({ jobs });
   } catch (error) {
     return NextResponse.json({ jobs: [], error: error instanceof Error ? error.message : "Failed to load hook jobs" });
@@ -18,8 +18,10 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const unauthorized = requireAdminToken(req);
+  const unauthorized = requireAdminToken(req) ?? sameOrigin(req);
   if (unauthorized) return unauthorized;
+  const owner = await requestOwner(req);
+  if (!owner) return NextResponse.json({ error: "Private review access required" }, { status: 401 });
 
   const body = await req.json();
   if (!body.id || !body.planFile || !body.status) {
@@ -36,7 +38,7 @@ export async function POST(req: NextRequest) {
       models: Array.isArray(body.models) ? body.models : null,
       error: body.error ?? null,
       logs: body.logs ?? null,
-    });
+    }, owner);
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Failed to save hook job" }, { status: 500 });

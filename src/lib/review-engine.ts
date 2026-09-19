@@ -4,12 +4,14 @@ import { RunBudget } from "./run-budget";
 import { abortError } from "./openrouter-client";
 import { mergeUsage, sameReviewInput, type ReviewInput, type RunCheckpoint } from "./run-checkpoint";
 import type { ModelInfo, ModelUsage } from "./types";
+import type { SourceDocument } from "./review-policy";
 
 export interface ReviewOptions extends ReviewInput {
   apiKey: string; models: ModelInfo[]; catalog: ModelInfo[]; synthesisModel: string;
   maxCost: number; maxTokens: number; synthesisMaxTokens: number; allowPaidFallback: boolean;
   previous?: RunCheckpoint | null; signal: AbortSignal; contextMetadata?: string;
   secondPass?: boolean; onChange: (run: RunCheckpoint, checkpoint: boolean) => void;
+  sources?: SourceDocument[]; projectKey?: string; baselineRunId?: string;
 }
 
 export async function executeReview(opts: ReviewOptions): Promise<RunCheckpoint> {
@@ -23,6 +25,7 @@ export async function executeReview(opts: ReviewOptions): Promise<RunCheckpoint>
     models: [...selected.values()], responses: previous?.responses ?? [], usage: previous?.usage ?? [], status: "running",
     synthesisModel: opts.synthesisModel, maxCost: opts.maxCost, maxTokens: opts.maxTokens, synthesisMaxTokens: opts.synthesisMaxTokens,
     synthesis: previous?.synthesis, secondPass: previous?.secondPass, contextMetadata: opts.contextMetadata,
+    sources: opts.sources, projectKey: opts.projectKey, baselineRunId: opts.baselineRunId,
   };
   const budget = new RunBudget(opts.maxCost, run.usage);
   const update = (change: Partial<RunCheckpoint>, checkpoint = true) => {
@@ -50,7 +53,7 @@ export async function executeReview(opts: ReviewOptions): Promise<RunCheckpoint>
     if (opts.secondPass || !run.synthesis) {
       update({ status: "synthesizing" });
       const synthesis = await synthesizeViaOpenRouter({ openrouterKey: opts.apiKey, modelId: opts.synthesisModel, content: run.content,
-        analysisPrompt: run.prompt, context: run.context,
+        analysisPrompt: run.prompt, context: run.context, sources: run.sources,
         responses: successful.map((response) => ({ model: response.model, modelName: response.modelName, family: response.family ?? "unknown", response: response.response! })),
         customSynthesisInstructions: opts.secondPass ? `Audit the first synthesis for unsupported claims, contradictions, and omitted evidence. Produce a corrected master document with traceable findings. First synthesis (untrusted):\n${run.synthesis?.masterDocument ?? ""}` : undefined,
         signal: opts.signal, budget, onUsage, reasoningEffort: run.reasoningEffort, maxTokens: opts.synthesisMaxTokens,

@@ -84,6 +84,7 @@ async function initializeDb() {
   await sql`ALTER TABLE responses ADD COLUMN IF NOT EXISTS save_key TEXT`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS response_save_key ON responses (run_id, save_key)`;
   await sql`ALTER TABLE syntheses ADD COLUMN IF NOT EXISTS save_key TEXT`;
+  await sql`ALTER TABLE run_telemetry ADD COLUMN IF NOT EXISTS owner_key TEXT`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS synthesis_save_key ON syntheses (run_id, save_key)`;
 
   await sql`
@@ -110,6 +111,8 @@ async function initializeDb() {
     )
   `;
 
+  await sql`ALTER TABLE hook_jobs ADD COLUMN IF NOT EXISTS owner_key TEXT`;
+
   initialized = true;
 }
 
@@ -120,13 +123,14 @@ export async function createRun(
   content: string,
   prompt: string,
   models: string[],
-  contextMetadata?: string | null
+  contextMetadata?: string | null,
+  owner: string | null = null
 ) {
   await initDb();
   const sql = getClient();
   await sql`
-    INSERT INTO runs (id, content, prompt, models, context_metadata)
-    VALUES (${id}, ${content}, ${prompt}, ${JSON.stringify(models)}, ${contextMetadata ?? null})
+    INSERT INTO runs (id, content, prompt, models, context_metadata, owner_key)
+    VALUES (${id}, ${content}, ${prompt}, ${JSON.stringify(models)}, ${contextMetadata ?? null}, ${owner})
   `;
 }
 
@@ -180,11 +184,13 @@ export async function updateRunCost(runId: string, totalCost: number) {
 }
 
 export async function saveRunCheckpoint(snapshot: RunCheckpoint, owner: string) {
+  if (snapshot.background) throw new Error("RUN_CONFLICT");
   await initDb();
   const sql = getClient();
   const existing = await sql`SELECT snapshot, snapshot_revision, owner_key FROM runs WHERE id = ${snapshot.id}`;
   if (existing.length && existing[0].owner_key !== owner) throw new Error("RUN_CONFLICT");
   const previous = existing[0]?.snapshot as RunCheckpoint | undefined;
+  if (previous?.background) throw new Error("RUN_CONFLICT");
   if (previous && !sameReviewInput(previous, snapshot)) throw new Error("RUN_CONFLICT");
   if (previous && previous.revision > snapshot.revision) throw new Error("RUN_CONFLICT");
   await sql`INSERT INTO runs (id, content, prompt, models, context_metadata, total_cost, snapshot, snapshot_revision, created_at, owner_key)
@@ -193,16 +199,18 @@ export async function saveRunCheckpoint(snapshot: RunCheckpoint, owner: string) 
       snapshot = EXCLUDED.snapshot, snapshot_revision = EXCLUDED.snapshot_revision
     WHERE runs.snapshot_revision < EXCLUDED.snapshot_revision
       AND runs.owner_key = EXCLUDED.owner_key
+      AND (runs.snapshot IS NULL OR runs.snapshot->'background' IS NULL)
       AND runs.content = EXCLUDED.content AND runs.prompt = EXCLUDED.prompt
       AND (runs.snapshot IS NULL OR (runs.snapshot->>'context' = EXCLUDED.snapshot->>'context'
         AND runs.snapshot->>'reasoningEffort' = EXCLUDED.snapshot->>'reasoningEffort'))`;
 }
 
 export async function getRun(id: string, owner: string | null = null) {
+  if (!owner) return null;
   await initDb();
   const sql = getClient();
 
-  const runs = await sql`SELECT * FROM runs WHERE id = ${id} AND (owner_key IS NULL OR owner_key = ${owner})`;
+  const runs = await sql`SELECT * FROM runs WHERE id = ${id} AND owner_key = ${owner}`;
   if (runs.length === 0) return null;
 
   const responses = await sql`
@@ -217,6 +225,7 @@ export async function getRun(id: string, owner: string | null = null) {
   const snapshot = row.snapshot as RunCheckpoint | null;
   return {
     ...row,
+    snapshot,
     models: JSON.parse(row.models as string),
     responses: snapshot ? snapshot.responses.map((response, index) => ({ ...response, id: index, model_name: response.modelName, base_architecture: response.family, time_ms: response.timeMs, input_tokens: response.inputTokens, output_tokens: response.outputTokens })) : responses,
     synthesis: snapshot?.synthesis ?? (syntheses[0] ? JSON.parse(syntheses[0].result as string) : null),
@@ -224,20 +233,22 @@ export async function getRun(id: string, owner: string | null = null) {
   };
 }
 
-export async function saveRunTelemetry(record: string) {
+export async function saveRunTelemetry(record: string, owner: string | null = null) {
   await initDb();
   const sql = getClient();
   await sql`
-    INSERT INTO run_telemetry (record)
-    VALUES (${record})
+    INSERT INTO run_telemetry (record, owner_key)
+    VALUES (${record}, ${owner})
   `;
 }
 
 export async function listRunTelemetry(limit = 500, owner: string | null = null): Promise<Array<{ record: string }>> {
+  if (!owner) return [];
   await initDb();
   const sql = getClient();
   const rows = await sql`
     SELECT record FROM run_telemetry
+    WHERE owner_key = ${owner}
     ORDER BY created_at DESC
     LIMIT ${limit}
   `;
@@ -268,11 +279,13 @@ export async function savePlanStatus(runId: string, status: string, approvedAt?:
   `;
 }
 
-export async function listHookJobs(limit = 100) {
+export async function listHookJobs(limit = 100, owner: string | null = null) {
+  if (!owner) return [];
   await initDb();
   const sql = getClient();
   return sql`
     SELECT * FROM hook_jobs
+    WHERE owner_key = ${owner}
     ORDER BY created_at DESC
     LIMIT ${limit}
   `;
@@ -287,12 +300,12 @@ export async function upsertHookJob(input: {
   models?: string[] | null;
   error?: string | null;
   logs?: string | null;
-}) {
+}, owner: string | null = null) {
   await initDb();
   const sql = getClient();
   await sql`
-    INSERT INTO hook_jobs (id, plan_file, status, run_id, cost, models, error, logs, updated_at)
-    VALUES (${input.id}, ${input.planFile}, ${input.status}, ${input.runId ?? null}, ${input.cost ?? 0}, ${input.models ? JSON.stringify(input.models) : null}, ${input.error ?? null}, ${input.logs ?? null}, NOW())
+    INSERT INTO hook_jobs (id, plan_file, status, run_id, cost, models, error, logs, updated_at, owner_key)
+    VALUES (${input.id}, ${input.planFile}, ${input.status}, ${input.runId ?? null}, ${input.cost ?? 0}, ${input.models ? JSON.stringify(input.models) : null}, ${input.error ?? null}, ${input.logs ?? null}, NOW(), ${owner})
     ON CONFLICT (id) DO UPDATE SET
       plan_file = EXCLUDED.plan_file,
       status = EXCLUDED.status,
@@ -302,20 +315,22 @@ export async function upsertHookJob(input: {
       error = EXCLUDED.error,
       logs = EXCLUDED.logs,
       updated_at = NOW()
+    WHERE hook_jobs.owner_key = EXCLUDED.owner_key
   `;
 }
 
 export async function listRuns(owner: string | null = null) {
+  if (!owner) return [];
   await initDb();
   const sql = getClient();
 
   const runs = await sql`
-    SELECT r.id, r.content, r.prompt, r.total_cost, r.context_metadata, r.created_at,
+    SELECT r.id, r.content, r.prompt, r.total_cost, r.context_metadata, r.created_at, r.snapshot->'background' AS background,
       CASE WHEN r.snapshot IS NOT NULL THEN jsonb_array_length(r.snapshot->'responses') ELSE COUNT(resp.id)::int END as response_count,
       CASE WHEN r.snapshot IS NOT NULL THEN CASE WHEN r.snapshot->'synthesis' IS NOT NULL THEN 1 ELSE 0 END ELSE (SELECT COUNT(*)::int FROM syntheses s WHERE s.run_id = r.id) END as has_synthesis
     FROM runs r
     LEFT JOIN responses resp ON resp.run_id = r.id
-    WHERE r.owner_key IS NULL OR r.owner_key = ${owner}
+    WHERE r.owner_key = ${owner}
     GROUP BY r.id, r.content, r.prompt, r.total_cost, r.context_metadata, r.created_at
     ORDER BY r.created_at DESC
     LIMIT 50

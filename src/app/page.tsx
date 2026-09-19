@@ -19,6 +19,9 @@ import { ResponseCard } from "@/components/response-card";
 import { SynthesisView } from "@/components/synthesis-view";
 import { SynthesisComparisonView } from "@/components/synthesis-comparison";
 import { CompareView } from "@/components/compare-view";
+import { FindingTracker } from "@/components/finding-tracker";
+import { diffSourceDocuments } from "@/lib/finding-tracking";
+import type { SourceDocument } from "@/lib/review-policy";
 
 const field = "mt-1 w-full min-w-0 border border-border bg-white px-3 py-2.5 text-sm text-ink focus:border-green";
 const button = "min-h-11 border border-border px-3 py-2 text-sm text-green hover:bg-green-light disabled:opacity-50";
@@ -40,6 +43,13 @@ export default function Home() {
   const [synthesisMaxTokens, setSynthesisMaxTokens] = useState(SYNTHESIS_MAX_TOKENS);
   const [reasoning, setReasoning] = useState("medium");
   const [allowFallback, setAllowFallback] = useState(false);
+  const [backgroundAvailable, setBackgroundAvailable] = useState(false);
+  const [background, setBackground] = useState(false);
+  const [adaptive, setAdaptive] = useState(false);
+  const [risk, setRisk] = useState<"standard" | "high">("standard");
+  const [projectKey, setProjectKey] = useState("default");
+  const [sourceDocuments, setSourceDocuments] = useState<SourceDocument[]>([]);
+  const [sourceContent, setSourceContent] = useState("");
   const [profiles, setProfiles] = useState<ProjectProfile[]>([]);
   const [profileId, setProfileId] = useState("");
   const [templateId, setTemplateId] = useState("plan-review");
@@ -60,6 +70,9 @@ export default function Home() {
   useEffect(() => {
     let mounted = true;
     async function load() {
+      void fetch("/api/reviews/capabilities").then(response => response.json()).then(data => {
+        if (mounted) { setBackgroundAvailable(Boolean(data.background)); setBackground(Boolean(data.background)); }
+      }).catch(() => {});
       const response = await fetch("/api/models").catch(() => null);
       const catalog = response?.ok ? await response.json() : null;
       if (!mounted) return;
@@ -108,7 +121,8 @@ export default function Home() {
 
   const context = restoredContext ?? (contextEnabled && activePack ? buildContextString(activePack, fileContents) : "");
   const missingContext = contextEnabled && activePack && restoredContext === null ? activePack.selectedFiles.filter((path) => !Object.hasOwn(fileContents, path)) : [];
-  const input = { content, prompt, context, reasoningEffort: reasoning };
+  const effectiveProjectKey = activePack && contextEnabled ? activePack.repo : projectKey.trim() || "default";
+  const input = { content, prompt, context, reasoningEffort: reasoning, projectKey: effectiveProjectKey };
   const sameInput = Boolean(review.run && sameReviewInput(review.run, input));
   const inputTokens = estimateTokens(content + prompt + context);
   const { tooSmall } = getModelsFilteredByContext(allModels, inputTokens, maxTokens);
@@ -138,6 +152,9 @@ export default function Home() {
     setMaxCost(snapshot.maxCost); setMaxTokens(snapshot.maxTokens); setSynthesisMaxTokens(snapshot.synthesisMaxTokens);
     setSynthesisModel((Object.entries(SYNTHESIS_IDS).find(([, id]) => id === snapshot.synthesisModel)?.[0] as SynthesisModelKey) ?? "sonnet");
     setMobileTab("results");
+    setSourceDocuments(snapshot.sources ?? []); setSourceContent(snapshot.content);
+    setProjectKey(snapshot.projectKey ?? "default"); setAdaptive(snapshot.adaptive?.enabled ?? false);
+    if (snapshot.background) setBackground(true);
   }
   async function start(secondPass = false, extraIds: string[] = []) {
     if (busy) return;
@@ -162,7 +179,13 @@ export default function Home() {
       if (!currentModels.some((model) => model.id === SYNTHESIS_IDS[synthesisModel])) throw new Error("The selected synthesizer is unavailable. Choose another.");
       setRuntimeCatalog(currentModels); setAllModels(currentModels); setSelected(ids); setCatalogNote(`Live catalog · checked ${String(catalog.checkedAt).slice(0, 10)}`);
       setMobileTab("results"); setCompareIds(new Set());
+      const sources = sameInput && review.run?.sources ? review.run.sources : [
+        ...(sourceContent === content ? sourceDocuments : []),
+        ...(contextEnabled && activePack && restoredContext === null ? activePack.selectedFiles.map(path => ({ id: `file:${path}`, path, text: fileContents[path] })) : []),
+      ].filter((source, index, all) => all.findIndex(item => item.id === source.id) === index);
       await review.start({ ...input, apiKey, models, catalog: currentModels, synthesisModel: SYNTHESIS_IDS[synthesisModel], maxCost, maxTokens, synthesisMaxTokens, allowPaidFallback: allowFallback,
+        background, adaptive: background && adaptive, risk, sources,
+        baselineRunId: sameInput ? review.run?.baselineRunId : (review.run?.projectKey ?? "default") === effectiveProjectKey ? review.run?.id : undefined,
         contextMetadata: activePack && contextEnabled ? JSON.stringify({ packId: activePack.id, packName: activePack.name, repo: activePack.repo, branch: activePack.branch, files: activePack.selectedFiles }) : undefined, secondPass });
     } catch (failure) { setError(failure instanceof Error ? failure.message : "Unable to start review"); }
     finally { setPreflight(false); }
@@ -172,9 +195,20 @@ export default function Home() {
     try {
       const match = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)(?:[/?#].*)?$/.exec(prUrl.trim());
       if (!match) throw new Error("Enter a GitHub pull request URL.");
-      const response = await fetch(`https://api.github.com/repos/${match[1]}/${match[2]}/pulls/${match[3]}`, { headers: { Accept: "application/vnd.github.diff", ...(githubPat ? { Authorization: `Bearer ${githubPat}` } : {}) }, signal: AbortSignal.timeout(30000) });
+      const url = `https://api.github.com/repos/${match[1]}/${match[2]}/pulls/${match[3]}`;
+      const headers: Record<string, string> = githubPat ? { Authorization: `Bearer ${githubPat}` } : {};
+      const before = await fetch(url, { headers, signal: AbortSignal.timeout(30000), cache: "no-store" });
+      if (!before.ok) throw new Error(`Could not load pull request (${before.status})`);
+      const metadata = await before.json();
+      const response = await fetch(url, { headers: { Accept: "application/vnd.github.diff", ...headers }, signal: AbortSignal.timeout(30000), cache: "no-store" });
       if (!response.ok) throw new Error(`Could not load pull request (${response.status}). Check the GitHub token in Settings for private repositories.`);
-      setContent(await response.text()); applyPreset("code-review");
+      const diff = await response.text();
+      const after = await fetch(url, { headers, signal: AbortSignal.timeout(30000), cache: "no-store" });
+      if (!after.ok) throw new Error("Could not verify the pull request revision. Try loading it again.");
+      const latest = await after.json();
+      if (latest.head.sha !== metadata.head.sha || latest.base.sha !== metadata.base.sha) throw new Error("The pull request changed while loading. Load it again to get consistent file citations.");
+      setContent(diff); setSourceContent(diff); setProjectKey(`${match[1]}/${match[2]}`);
+      setSourceDocuments(diffSourceDocuments(diff, metadata.head.repo.full_name, metadata.head.sha)); applyPreset("code-review");
     } catch (failure) { setError(failure instanceof Error ? failure.message : "PR load failed"); }
     finally { setPrLoading(false); }
   }
@@ -192,7 +226,7 @@ export default function Home() {
     {showKeys && <section aria-label="API connection" className="border-b border-border bg-white p-4 sm:px-8 space-y-3">
       <label className="block max-w-xl text-sm">OpenRouter API key<input type="password" autoComplete="off" value={apiKey} onChange={(event) => saveKey(event.target.value)} className={field} placeholder="sk-or-…" /></label>
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={rememberKey} onChange={(event) => { setRememberKey(event.target.checked); saveKey(apiKey, event.target.checked); }} />Remember key on this device</label>
-      <p className="text-sm text-grey-50">One key covers reviewers and synthesis. Keys stay in this browser and are excluded from saved reviews. Remembered keys are stored unencrypted on this device.</p>
+      <p className="text-sm text-grey-50">One key covers reviewers and synthesis. Browser reviews call OpenRouter directly; background reviews temporarily encrypt your key on the server. Saved review results never include the key. Remembered keys are stored unencrypted on this device.</p>
     </section>}
     <div className="mx-auto max-w-[1500px]">
       {review.restorable && <div className="m-4 border border-green bg-green-light p-4 flex flex-wrap items-center gap-3 text-sm">
@@ -209,6 +243,7 @@ export default function Home() {
         <section id="review-setup" aria-label="Review setup" className={`${mobileTab === "setup" ? "block" : "hidden"} min-w-0 bg-white p-4 sm:p-6 lg:block lg:border-r border-border`}>
           <fieldset disabled={busy} className="min-w-0 space-y-6 disabled:opacity-70">
             <div className="grid gap-3 sm:grid-cols-2">
+              <label className="text-sm">Project for finding history<input value={activePack && contextEnabled ? activePack.repo : projectKey} disabled={Boolean(activePack && contextEnabled)} onChange={event => setProjectKey(event.target.value)} maxLength={200} className={field} placeholder="e.g. owner/repository" /></label>
               <label className="text-sm">Project profile<select className={field} value={profileId} onChange={(event) => {
                 const id = event.target.value; setProfileId(id); setActiveProjectProfileId(id);
                 const profile = profiles.find((item) => item.id === id);
@@ -237,6 +272,13 @@ export default function Home() {
               <label className="text-sm">Synthesis output budget<select value={synthesisMaxTokens} onChange={(event) => setSynthesisMaxTokens(Number(event.target.value))} className={field}>{[16384, 32768, 65536].map((tokens) => <option key={tokens} value={tokens}>{tokens.toLocaleString()} tokens</option>)}</select></label>
             </div>
             <label className="flex gap-2 items-start text-sm"><input type="checkbox" checked={allowFallback} onChange={(event) => setAllowFallback(event.target.checked)} className="mt-1" />Allow a paid replacement for an unavailable free reviewer, within the spending limit.</label>
+            {backgroundAvailable && <div className="border border-border p-3 space-y-3 text-sm">
+              <label className="flex gap-2 items-start"><input type="checkbox" checked={background} onChange={event => setBackground(event.target.checked)} className="mt-1" />Keep running after you close this tab</label>
+              <p className="text-xs text-grey-50">Background reviews encrypt your provider key on the server for this run. It expires after 24 hours and is cleared when the run ends or during daily cleanup. Progress and spending remain in private History.</p>
+              {background && <><label className="flex gap-2 items-start"><input type="checkbox" checked={adaptive} onChange={event => setAdaptive(event.target.checked)} className="mt-1" />Adaptive council: start with three reviewers, then add selected reviewers when concerns remain.</label>
+              <label className="block">Review risk<select className={field} value={risk} onChange={event => setRisk(event.target.value as "standard" | "high")}><option value="standard">Standard</option><option value="high">High — always use every selected reviewer</option></select></label>
+              {adaptive && <p className="text-xs text-grey-50">Experimental. Escalation may require a second synthesis and cost more than a fixed council. Your spending limit still applies.</p>}</>}
+            </div>}
             <p className="text-xs text-grey-50 leading-relaxed">The limit covers this run’s reviewers, synthesis, retries, and second pass. Unknown charges after an interrupted request reserve the full request ceiling. Provider billing may continue briefly after Stop. Reasoning uses the closest effort supported by each model.</p>
           </fieldset>
         </section>
@@ -245,6 +287,8 @@ export default function Home() {
             <div className="flex flex-wrap justify-between gap-3 text-sm"><p role="status" aria-live="polite">{review.run.status === "synthesizing" ? "Synthesizing completed answers…" : `${completeCount} of ${review.run.models.length} reviewers complete · ${review.run.status}`}</p><Link className="text-green underline" href={`/runs/${review.run.id}`}>Saved review</Link></div>
             {!sameInput && <p className="border border-gold p-3 text-sm">These results belong to the previous input. Running your edited content creates a new review.</p>}
             {review.run.error && <p role="status" className="border border-gold bg-white p-3 text-sm">{review.run.error}</p>}
+            {review.run.background && <p className="text-sm text-green" role="status">{review.run.background.phase}{["queued", "running"].includes(review.run.background.state) ? " · You can close this tab and return from History." : ""}</p>}
+            {review.run.adaptive?.enabled && <p className="text-xs text-grey-50">Adaptive council · {review.run.adaptive.initialIds.length} initial reviewers · {review.run.adaptive.escalatedIds.length} added{review.run.adaptive.reasons.length ? ` · ${review.run.adaptive.reasons.join("; ")}` : ""}</p>}
             <div className="flex flex-wrap gap-2">
               <button className={button} onClick={async () => { try { await navigator.clipboard.writeText(checkpointMarkdown(review.run!)); setCopied(true); } catch { setError("Clipboard unavailable. Open the saved review to export it."); } }}>{copied ? "Copied" : "Copy full review"}</button>
               {compareIds.size >= 2 && <button className={button} onClick={() => setShowCompare(true)}>Compare {compareIds.size} answers</button>}
@@ -252,6 +296,7 @@ export default function Home() {
             </div>
             {review.run.synthesis && <SynthesisView synthesis={review.run.synthesis} onSecondPass={sameInput && !busy ? () => start(true) : undefined} secondPassLoading={busy} />}
             {review.run.secondPass && review.run.synthesis && <><SynthesisComparisonView previous={review.run.synthesis} next={review.run.secondPass} /><SynthesisView synthesis={review.run.secondPass} title="Second pass" /></>}
+            {review.run.synthesis && !busy && <FindingTracker runId={review.run.id} revision={review.run.revision} />}
             <h2 className="font-display text-2xl">Council responses</h2>
             {responses.map((response) => <ResponseCard key={response.requestedModel ?? response.model} response={response} compareMode={!busy} isComparing={compareIds.has(response.model)} onToggleCompare={() => setCompareIds((current) => { const next = new Set(current); if (next.has(response.model)) next.delete(response.model); else next.add(response.model); return next; })} />)}
           </>}

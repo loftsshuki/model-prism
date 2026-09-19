@@ -1,9 +1,11 @@
 import { z } from "zod";
 import type { ModelInfo, ModelResponse, ModelUsage, SynthesisResult } from "./types";
 import { jsonHeaders } from "./client-api";
+import { SourceDocumentSchema, type SourceDocument } from "./review-policy";
 
 export interface ReviewInput {
   content: string; prompt: string; context: string; reasoningEffort: string;
+  projectKey?: string;
 }
 export interface RunCheckpoint extends ReviewInput {
   version: 1; id: string; revision: number; createdAt: string; updatedAt: string;
@@ -12,10 +14,16 @@ export interface RunCheckpoint extends ReviewInput {
   synthesisModel: string; maxCost: number; maxTokens: number; synthesisMaxTokens: number;
   synthesis?: SynthesisResult; secondPass?: SynthesisResult; error?: string;
   contextMetadata?: string;
+  sources?: SourceDocument[];
+  background?: { execution: number; state: "queued" | "running" | "stopping" | "stopped" | "complete" | "error"; phase: string };
+  adaptive?: { enabled: boolean; initialIds: string[]; escalatedIds: string[]; reasons: string[] };
+  projectKey?: string;
+  baselineRunId?: string;
 }
 
 export function sameReviewInput(a: ReviewInput, b: ReviewInput): boolean {
-  return a.content === b.content && a.prompt === b.prompt && a.context === b.context && a.reasoningEffort === b.reasoningEffort;
+  return a.content === b.content && a.prompt === b.prompt && a.context === b.context && a.reasoningEffort === b.reasoningEffort
+    && (a.projectKey ?? "default") === (b.projectKey ?? "default");
 }
 export function mergeUsage(records: ModelUsage[]): ModelUsage[] {
   return [...new Map(records.map((record) => [record.requestId, record])).values()];
@@ -33,6 +41,10 @@ export const CheckpointSchema = z.object({
   status: z.enum(["running", "synthesizing", "stopped", "complete", "error"]), models: z.array(modelSchema).max(100), responses: z.array(responseSchema).max(100), usage: z.array(usageSchema).max(2000),
   synthesisModel: z.string().max(200), maxCost: z.number().finite().positive(), maxTokens: z.number().int().positive().max(131072), synthesisMaxTokens: z.number().int().positive().max(131072),
   synthesis: z.record(z.string(), z.unknown()).optional(), secondPass: z.record(z.string(), z.unknown()).optional(), error: z.string().max(4000).optional(), contextMetadata: z.string().max(20000).optional(),
+  sources: z.array(SourceDocumentSchema).max(100).optional(),
+  background: z.object({ execution: z.number().int(), state: z.enum(["queued", "running", "stopping", "stopped", "complete", "error"]), phase: z.string().max(300) }).optional(),
+  adaptive: z.object({ enabled: z.boolean(), initialIds: z.array(z.string()), escalatedIds: z.array(z.string()), reasons: z.array(z.string()) }).optional(),
+  projectKey: z.string().max(200).optional(), baselineRunId: z.string().max(100).optional(),
 });
 
 function openCheckpoints(): Promise<IDBDatabase> {

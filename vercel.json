@@ -1,11 +1,10 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "npm ci",
+  "buildCommand": "npm run verify",
   "functions": {
-    "src/app/api/invoke-model/route.ts": {
-      "maxDuration": 60
-    },
-    "src/app/api/synthesize/route.ts": {
-      "maxDuration": 60
-    }
+    "src/app/api/invoke-model/route.ts": { "maxDuration": 60 },
+    "src/app/api/synthesize/route.ts": { "maxDuration": 60 }
   },
-  "installCommand": "npm ci"
+  "crons": [{ "path": "/api/cron/model-freshness", "schedule": "0 14 * * *" }]
 }

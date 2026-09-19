@@ -1,7 +1,7 @@
 import pLimit from "p-limit";
 import { DEFAULT_FALLBACK_ID, FREE_FALLBACK_IDS, getModel, detectFamily, SNAPSHOT_MODELS } from "./model-catalog";
 import { abortError, isCancelled, ProviderError, requestCompletion } from "./openrouter-client";
-import type { RunBudget } from "./run-budget";
+import type { RequestBudget } from "./run-budget";
 import type { ModelInfo, ModelResponse, ModelUsage } from "./types";
 
 export interface FanOutParams {
@@ -12,9 +12,10 @@ export interface FanOutParams {
   apiKey: string;
   runId: string | null;
   maxTokens: number;
+  maxAttempts?: number;
   isAborted: () => boolean;
   signal?: AbortSignal;
-  budget?: RunBudget;
+  budget?: RequestBudget;
   reasoningEffort?: string;
   allowPaidFallback?: boolean;
   onUsage?: (usage: ModelUsage) => void;
@@ -34,6 +35,7 @@ async function invokeModel(model: ModelInfo, params: FanOutParams): Promise<Mode
   const call = async (target: ModelInfo) => {
     if (params.isAborted() || params.signal?.aborted) throw abortError();
     const data = await requestCompletion({ model: target, apiKey: params.apiKey, messages, maxTokens: params.maxTokens,
+      maxAttempts: params.maxAttempts,
       signal: params.signal, budget: params.budget, reasoningEffort: params.reasoningEffort,
       onUsage: (u) => { usage.push(u); params.onUsage?.(u); },
       onText: (text) => { result.response = text; update(); },

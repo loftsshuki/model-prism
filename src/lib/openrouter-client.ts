@@ -1,5 +1,5 @@
 import { getModel } from "./model-catalog";
-import { BudgetExceededError, requestCeiling, requestCost, RunBudget } from "./run-budget";
+import { BudgetExceededError, requestCeiling, requestCost, type RequestBudget } from "./run-budget";
 import type { ModelInfo, ModelUsage } from "./types";
 
 export interface ToolCall { id: string; type: "function"; function: { name: string; arguments: string } }
@@ -36,7 +36,7 @@ export interface CompletionOptions {
   temperature?: number;
   reasoningEffort?: string;
   signal?: AbortSignal;
-  budget?: RunBudget;
+  budget?: RequestBudget;
   onUsage?: (usage: ModelUsage) => void;
   onText?: (text: string) => void;
   maxAttempts?: number;
@@ -129,11 +129,12 @@ export async function requestCompletion(opts: CompletionOptions): Promise<Comple
     opts.signal?.throwIfAborted();
     const requestId = crypto.randomUUID();
     const ceiling = requestCeiling(model, opts.messages, maxTokens, opts.tools);
-    opts.budget?.reserve(requestId, ceiling);
+    await opts.budget?.reserve(requestId, ceiling);
     let sent = false;
     let settled = false;
-    const settle = (usage: ModelUsage) => {
-      settled = true; opts.budget?.settle(requestId, usage); opts.onUsage?.(usage);
+    const settle = async (usage: ModelUsage) => {
+      await opts.budget?.settle(requestId, usage);
+      settled = true; opts.onUsage?.(usage);
     };
     const signal = AbortSignal.any([...(opts.signal ? [opts.signal] : []), AbortSignal.timeout(240000)]);
     try {
@@ -155,7 +156,7 @@ export async function requestCompletion(opts: CompletionOptions): Promise<Comple
       if (!res.ok) {
         const body = await res.text();
         // Rejected requests did not generate output; do not count them as a model charge.
-        opts.budget?.release(requestId); settled = true;
+        await opts.budget?.release(requestId); settled = true;
         const retry = res.headers.get("retry-after");
         const retryMs = retry ? (/^\d+(?:\.\d+)?$/.test(retry) ? Number(retry) * 1000 : Math.max(0, Date.parse(retry) - Date.now())) : 0;
         throw new ProviderError(`OpenRouter error: ${res.status} ${body.slice(0, 240)}`, res.status, retryMs);
@@ -164,14 +165,14 @@ export async function requestCompletion(opts: CompletionOptions): Promise<Comple
       const u = data.usage;
       const providerCost = typeof u?.cost === "number" && Number.isFinite(u.cost) && u.cost >= 0;
       const hasTokens = typeof u?.prompt_tokens === "number" && typeof u?.completion_tokens === "number";
-      settle({ requestId, model: data.model ?? model.id, inputTokens: u?.prompt_tokens ?? 0, outputTokens: u?.completion_tokens ?? 0,
+      await settle({ requestId, model: data.model ?? model.id, inputTokens: u?.prompt_tokens ?? 0, outputTokens: u?.completion_tokens ?? 0,
         cost: providerCost ? u!.cost! : hasTokens ? requestCost(model, u!.prompt_tokens!, u!.completion_tokens!) : ceiling,
         costSource: providerCost ? "provider" : hasTokens ? "estimated" : "reserved" });
       return data;
     } catch (error) {
       if (!settled) {
-        if (sent) settle({ requestId, model: model.id, inputTokens: 0, outputTokens: 0, cost: ceiling, costSource: "reserved" });
-        else opts.budget?.release(requestId);
+        if (sent) await settle({ requestId, model: model.id, inputTokens: 0, outputTokens: 0, cost: ceiling, costSource: "reserved" });
+        else await opts.budget?.release(requestId);
       }
       if (isCancelled(error) || opts.signal?.aborted || error instanceof BudgetExceededError) throw error;
       if (error instanceof ProviderError && !error.retryable) throw error;

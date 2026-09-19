@@ -10,6 +10,8 @@ import { buildActionChecklistMarkdown, extractActionItems } from "@/lib/review-a
 import { buildGithubReviewMarkdown, parseDiffFiles } from "@/lib/pr-review";
 import { SynthesisView } from "@/components/synthesis-view";
 import { ResponseCard } from "@/components/response-card";
+import { FindingTracker } from "@/components/finding-tracker";
+import { checkpointMarkdown } from "@/lib/run-checkpoint";
 
 interface SavedRun {
   id: string;
@@ -35,8 +37,9 @@ interface SavedRun {
 }
 
 function exportToMarkdown(run: SavedRun): string {
+  if (run.snapshot) return checkpointMarkdown(run.snapshot);
   const lines: string[] = [];
-  lines.push(`# Model Prism Run — ${new Date(run.created_at + "Z").toLocaleString()}`);
+  lines.push(`# Model Prism Run — ${new Date(run.created_at.includes("T") ? run.created_at : run.created_at + "Z").toLocaleString()}`);
   lines.push("");
   lines.push(`## Prompt`);
   lines.push(run.prompt);
@@ -171,6 +174,21 @@ export default function RunPage() {
       });
   }, [id]);
 
+  const backgroundActive = !!run?.snapshot?.background && ["queued", "running", "stopping"].includes(run.snapshot.background.state);
+  useEffect(() => {
+    if (!backgroundActive) return;
+    let disposed = false, reading = false;
+    const timer = setInterval(() => {
+      if (reading) return;
+      reading = true;
+      void fetch(`/api/runs/${encodeURIComponent(id)}`, { headers: authHeaders(), cache: "no-store", signal: AbortSignal.timeout(10000) })
+        .then(async response => { if (!response.ok) throw new Error("Connection interrupted. The server keeps your review; refreshing…"); return response.json(); })
+        .then(data => { if (!disposed) { setRun(data.run); setError(null); } })
+        .catch(error => { if (!disposed) setError(error.message); }).finally(() => { reading = false; });
+    }, 2000);
+    return () => { disposed = true; clearInterval(timer); };
+  }, [id, backgroundActive]);
+
   const handleRerun = () => {
     if (!run) return;
     sessionStorage.setItem(
@@ -186,7 +204,7 @@ export default function RunPage() {
   const handleExport = () => {
     if (!run) return;
     const md = exportToMarkdown(run);
-    const date = new Date(run.created_at + "Z").toISOString().slice(0, 10);
+    const date = new Date(run.created_at.includes("T") ? run.created_at : run.created_at + "Z").toISOString().slice(0, 10);
     downloadMarkdown(md, `model-prism-${date}-${run.id.slice(0, 8)}.md`);
   };
 
@@ -200,7 +218,7 @@ export default function RunPage() {
       actionChecklist: run.synthesis ? buildActionChecklistMarkdown(extractActionItems(run.synthesis)) : undefined,
       files,
     });
-    const date = new Date(run.created_at + "Z").toISOString().slice(0, 10);
+    const date = new Date(run.created_at.includes("T") ? run.created_at : run.created_at + "Z").toISOString().slice(0, 10);
     downloadMarkdown(md, `github-review-${date}-${run.id.slice(0, 8)}.md`);
   };
 
@@ -223,7 +241,7 @@ export default function RunPage() {
     if (!run) return;
     const frontmatter = buildPlanFrontmatter({
       status,
-      reviewedAt: new Date(run.created_at + "Z").toISOString(),
+      reviewedAt: new Date(run.created_at.includes("T") ? run.created_at : run.created_at + "Z").toISOString(),
       approvedAt: ["founder-approved", "ready", "executed"].includes(status) ? new Date().toISOString() : undefined,
       reviewModel: run.synthesisModel,
       roster: run.models,
@@ -242,7 +260,7 @@ export default function RunPage() {
     );
   }
 
-  if (error || !run) {
+  if (!run) {
     return (
       <div className="min-h-screen bg-cream flex items-center justify-center text-grey-40">
         {error || "Run not found"}
@@ -295,6 +313,8 @@ export default function RunPage() {
       </header>
 
       <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+        {error && <p role="status" className="border border-gold p-3 text-sm">{error}</p>}
+        {run.snapshot?.background && <div className="border border-green p-4 text-sm space-y-2"><p role="status">{run.snapshot.background.phase} · {run.snapshot.background.state}</p>{run.snapshot.error && <p>{run.snapshot.error}</p>}{backgroundActive && <p>This review continues on the server. <Link className="underline" href={`/?resume=${run.id}`}>Open live controls</Link> to stop or inspect it.</p>}</div>}
         {/* Plan Approval */}
         <div className="border border-gold/30 bg-white p-5">
           <div className="flex items-center justify-between gap-4 mb-4">
@@ -328,7 +348,7 @@ export default function RunPage() {
           </div>
           <p className="text-sm text-ink font-medium mb-2">{run.prompt}</p>
           <p className="text-xs text-grey-40 line-clamp-3 leading-relaxed">{run.content}</p>
-          <div className="flex gap-4 mt-4 pt-3 border-t border-border">
+          <div className="flex flex-wrap gap-4 mt-4 pt-3 border-t border-border">
             <span className="text-[10px] tracking-wide uppercase text-grey-40">{successCount} of {run.responses.length} models</span>
             <span className="text-[10px] tracking-wide text-grey-30">{formatDate(run.created_at)}</span>
             {run.total_cost > 0 && (
@@ -342,6 +362,8 @@ export default function RunPage() {
 
         {/* Synthesis */}
         {run.synthesis && <SynthesisView synthesis={run.synthesis} />}
+        {run.snapshot?.secondPass && <SynthesisView synthesis={run.snapshot.secondPass} title="Second pass" />}
+        {run.synthesis && !backgroundActive && <FindingTracker runId={run.id} revision={run.snapshot?.revision} />}
 
         {/* Responses */}
         <div className="space-y-2">

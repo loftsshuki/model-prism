@@ -1,0 +1,40 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { isAbsolute } from "node:path";
+import type { EvaluationFixture } from "../src/lib/evaluation";
+
+const before = "a39d3480e2d5c5524e661fedb00c57f03251ef05";
+const after = "05c3f886be57c4ae83423dfc9d42fad35cc4aa1a";
+const fixtures: EvaluationFixture[] = [];
+const gitBinary = process.env.GIT_BIN ?? (process.platform === "win32" ? "C:/Program Files/Git/cmd/git.exe" : "/usr/bin/git");
+if (!isAbsolute(gitBinary) || !existsSync(gitBinary)) throw new Error("Set GIT_BIN to the absolute path of your trusted Git executable");
+function source(commit: string, path: string, from: string, until?: string) {
+  const text = execFileSync(gitBinary, ["show", `${commit}:${path}`], { encoding: "utf8", timeout: 10000 }).replaceAll("\r\n", "\n");
+  const start = text.indexOf(from), end = until ? text.indexOf(until, start + from.length) : text.length;
+  if (start < 0 || end < start) throw new Error(`Source anchors not found: ${path}:${from}`);
+  return { path, text: text.slice(start, end).trimEnd(), startLine: text.slice(0, start).split("\n").length };
+}
+function pair(id: string, rule: string, contract: string, oldFile: ReturnType<typeof source>, newFile: ReturnType<typeof source>, needle: string, supporting: EvaluationFixture["files"] = []) {
+  const offset = oldFile.text.indexOf(needle);
+  if (offset < 0) throw new Error(`Evidence needle not found: ${id}`);
+  const line = oldFile.startLine + oldFile.text.slice(0, offset).split("\n").length - 1;
+  for (const [variant, commit, file, expected] of [["before", before, oldFile, [{ rule, path: oldFile.path, startLine: line, endLine: line + needle.split("\n").length - 1 }]], ["after", after, newFile, []]] as const) {
+    fixtures.push({ id: `${id}-${variant}`, rule, contract, provenance: { kind: "repository", commit, url: `https://github.com/loftsshuki/model-prism/blob/${commit}/${file.path}#L${file.startLine}` }, files: [file, ...(variant === "after" ? supporting : [])], expected: [...expected] });
+  }
+}
+pair("run-cost", "COST_OVERWRITE", "A caller passes each reviewer's individual cost to updateRunCost after saving its response. The stored total must cover every response and synthesis exactly once, including repeated saves.", source(before, "src/lib/db.ts", "export async function updateRunCost", "export async function getRun"), source(after, "src/lib/db.ts", "export async function updateRunCost", "export async function saveRunCheckpoint"), "UPDATE runs SET total_cost =");
+pair("response-save", "DUPLICATE_PERSISTENCE", "Retrying an identical saveResponse after a network timeout must not create a second response or count its charge twice. The database has the unique index used by an ON CONFLICT clause, if the implementation supplies one.", source(before, "src/lib/db.ts", "export async function saveResponse", "export async function saveSynthesis"), source(after, "src/lib/db.ts", "export async function saveResponse", "export async function saveSynthesis"), "INSERT INTO responses");
+pair("synthesis-save", "DUPLICATE_PERSISTENCE", "Retrying an identical saveSynthesis after a network timeout must not create another synthesis or charge. The database has the unique index used by an ON CONFLICT clause, if present.", source(before, "src/lib/db.ts", "export async function saveSynthesis", "export async function updateRunCost"), source(after, "src/lib/db.ts", "export async function saveSynthesis", "export async function updateRunCost"), "INSERT INTO syntheses");
+pair("rendering", "UNSAFE_HTML", "A model's masterDocument may contain HTML with event handlers or javascript links. Rendering it must not execute scripts. Standard react-markdown URL filtering applies; raw HTML is not enabled unless shown.", source(before, "src/components/synthesis-view.tsx", "      {/* Master Document", "      {/* Toggle"), source(after, "src/components/synthesis-view.tsx", "      {/* Master Document", "      {/* Toggle"), "dangerouslySetInnerHTML", [source(after, "src/components/markdown.tsx", "import ReactMarkdown")]);
+pair("partial-output", "PARTIAL_AS_COMPLETE", "Only a nonempty response with finish_reason 'stop' may be marked complete and passed to synthesis. Truncated or empty output must remain incomplete.", source(before, "src/lib/fan-out.ts", "async function callDirect(", "async function persistResponse"), source(after, "src/lib/fan-out.ts", "async function invokeModel", "export async function fanOut"), "response: data.choices?.[0]?.message?.content ?? \"\"");
+pair("paid-fallback", "UNCONSENTED_PAID_FALLBACK", "A free model may switch to a paid replacement only when the user explicitly enabled paid fallback. Provider failures alone must not authorize a paid request.", source(before, "src/lib/fan-out.ts", "async function invokeModel("), source(after, "src/lib/fan-out.ts", "async function invokeModel", "export async function fanOut"), "FALLBACK_MAP[model.id]");
+pair("cancel-request", "UNABORTABLE_REQUEST", "Stopping an active review must be able to abort the network request, not merely skip requests that have not started. Examine whether a cancellation signal reaches fetch.", source(before, "src/lib/fan-out.ts", "async function callDirect(", "async function persistResponse"), source(after, "src/lib/openrouter-client.ts", "export async function requestCompletion"), "const res = await fetch(");
+pair("permanent-error", "RETRY_PERMANENT_ERROR", "An HTTP 404 model-unavailable response must fail after one attempt. Trace both the error thrown for a 404 and any surrounding retry catch.", source(before, "src/lib/fan-out.ts", "async function callDirect(", "async function persistResponse"), source(after, "src/lib/openrouter-client.ts", "export async function requestCompletion"), "if (res.status === 404)", [source(after, "src/lib/openrouter-client.ts", "export class ProviderError", "export function isCancelled")]);
+const controls = [
+  { id: "async-reserve", rule: "MISSING_BUDGET_RESERVATION", contract: "budget.reserve is asynchronous and can reject. No provider request may be dispatched before its reservation is durably accepted.", bad: "export async function run(budget, id, ceiling, provider) {\n  budget.reserve(id, ceiling);\n  return provider.send();\n}", good: "export async function run(budget, id, ceiling, provider) {\n  await budget.reserve(id, ceiling);\n  return provider.send();\n}" },
+  { id: "legacy-privacy", rule: "UNOWNED_DATA_ACCESS", contract: "Legacy rows whose owner_key is NULL must not be readable by anonymous callers or arbitrary authenticated owners. owner is a validated account identity; SQL interpolation below is parameterized.", bad: "export async function getRun(sql, id, owner) {\n  return sql`SELECT * FROM runs WHERE id = ${id} AND (owner_key IS NULL OR owner_key = ${owner})`;\n}", good: "export async function getRun(sql, id, owner) {\n  if (!owner) return null;\n  return sql`SELECT * FROM runs WHERE id = ${id} AND owner_key = ${owner}`;\n}" },
+];
+for (const item of controls) for (const safe of [false, true]) fixtures.push({ id: `${item.id}-${safe ? "safe" : "unsafe"}`, contract: item.contract, rule: item.rule, provenance: { kind: "control" }, files: [{ path: "control.ts", text: safe ? item.good : item.bad, startLine: 1 }], expected: safe ? [] : [{ rule: item.rule, path: "control.ts", startLine: 2, endLine: 2 }] });
+mkdirSync("evals", { recursive: true });
+writeFileSync("evals/repository-regressions.json", JSON.stringify({ version: 1, scope: "16 source excerpts from Model Prism's real before/after fixes and four focused controls. A scoped regression suite, not a general model ranking.", fixtures }, null, 2) + "\n");
+console.log(`Wrote ${fixtures.length} reproducible evaluation fixtures`);
