@@ -8,7 +8,14 @@ export interface EvaluationFixture {
 export const EvaluationAnswer = z.object({ findings: z.array(z.object({ rule: z.string().min(1), path: z.string().min(1), line: z.number().int().positive(), quote: z.string().min(12), explanation: z.string().min(1) })).max(50) });
 export type EvaluationFinding = z.infer<typeof EvaluationAnswer>["findings"][number];
 export function parseEvaluationAnswer(text: string) {
-  return EvaluationAnswer.parse(JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""))).findings;
+  let json = text.trim();
+  if (json.startsWith("```")) {
+    json = json.slice(3);
+    if (json.slice(0, 4).toLowerCase() === "json") json = json.slice(4);
+    json = json.trim();
+    if (json.endsWith("```")) json = json.slice(0, -3).trimEnd();
+  }
+  return EvaluationAnswer.parse(JSON.parse(json)).findings;
 }
 export function scoreEvaluation(fixture: EvaluationFixture, findings: EvaluationFinding[], valid = true) {
   const matched = new Set<number>();

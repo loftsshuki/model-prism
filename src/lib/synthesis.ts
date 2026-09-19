@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { SYNTHESIS_IDS, SYNTHESIS_MAX_TOKENS } from "./model-catalog";
 import { requestCompletion } from "./openrouter-client";
-import type { RunBudget } from "./run-budget";
+import type { RequestBudget } from "./run-budget";
 import type { ModelUsage, SynthesisResult as ReviewResult } from "./types";
 
 const FindingSchema = z.object({
@@ -254,7 +254,7 @@ export async function synthesizeViaOpenRouter(opts: {
   responses: Array<{ model: string; modelName: string; family: string; response: string }>;
   modelId?: string; context?: string; customSynthesisInstructions?: string | null;
   retryOptions?: { maxAttempts?: number; baseDelayMs?: number };
-  signal?: AbortSignal; budget?: RunBudget; onUsage?: (usage: ModelUsage) => void;
+  signal?: AbortSignal; budget?: RequestBudget; onUsage?: (usage: ModelUsage) => void;
   reasoningEffort?: string; maxTokens?: number;
   model?: import("./types").ModelInfo;
   sources?: import("./review-policy").SourceDocument[];

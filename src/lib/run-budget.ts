@@ -4,8 +4,15 @@ export class BudgetExceededError extends Error {
   constructor() { super("Run budget reached. Increase the budget to resume the remaining work."); this.name = "BudgetExceededError"; }
 }
 
+/** Provider requests must await both local and durable budget operations. */
+export interface RequestBudget {
+  reserve(id: string, ceiling: number): void | Promise<void>;
+  settle(id: string, record: ModelUsage): void | Promise<void>;
+  release(id: string): void | Promise<void>;
+}
+
 /** Reservations include concurrent requests. Uncertain/aborted charges retain their ceiling. */
-export class RunBudget {
+export class RunBudget implements RequestBudget {
   private reservations = new Map<string, number>();
   private records = new Map<string, ModelUsage>();
   constructor(public readonly limit: number, usage: ModelUsage[] = [], private readonly parent?: RunBudget) {

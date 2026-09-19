@@ -41,7 +41,11 @@ export function evidenceLocations(finding: ReviewFinding, sources: SourceDocumen
 
 export function findingIdentity(finding: ReviewFinding, locations: EvidenceLocation[]) {
   const normalize = (text: string) => text.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-  const paths = [...new Set(locations.map(location => location.path))].sort();
+  // Code-point order keeps identities identical across server/browser locales.
+  const paths = [...new Set(locations.map(location => location.path))].sort((a, b) => {
+    if (a === b) return 0;
+    return a < b ? -1 : 1;
+  });
   return JSON.stringify([normalize(finding.title), paths, paths.length ? "" : normalize(finding.evidence[0]?.quote ?? finding.recommendation)]);
 }
 

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { neon } from "@neondatabase/serverless";
 import { initDb } from "../db";
-import { RunBudget, BudgetExceededError } from "../run-budget";
+import { type RequestBudget, BudgetExceededError } from "../run-budget";
 import { checkpointCost, sameReviewInput, type RunCheckpoint } from "../run-checkpoint";
 import { initialCouncil, type BackgroundReviewInput } from "../review-policy";
 import type { ModelInfo, ModelUsage } from "../types";
@@ -260,9 +260,11 @@ export async function recoverAbandonedReviews() {
 }
 
 /** Every reservation and settlement is serialized on the database's run lock. */
-export class PersistentRunBudget extends RunBudget {
-  constructor(private runId: string, private execution: number, private modelId: string, limit: number) { super(limit); }
-  override async reserve(requestId: string, ceiling: number) {
+export class PersistentRunBudget implements RequestBudget {
+  constructor(private readonly runId: string, private readonly execution: number, private readonly modelId: string, readonly limit: number) {
+    if (!Number.isFinite(limit) || limit <= 0) throw new Error("Set a positive run budget.");
+  }
+  async reserve(requestId: string, ceiling: number) {
     await changeJob(this.runId, this.execution, async job => {
       if (job.cancelRequested || !["queued", "running"].includes(job.snapshot.background!.state)) throw new DOMException("Stopped", "AbortError");
       if (job.snapshot.usage.some(usage => usage.requestId === requestId)) throw new ReviewConflict("Request already reserved");
@@ -270,13 +272,13 @@ export class PersistentRunBudget extends RunBudget {
       job.snapshot.usage.push({ requestId, model: this.modelId, inputTokens: 0, outputTokens: 0, cost: ceiling, costSource: "reserved" });
     });
   }
-  override async settle(requestId: string, record: ModelUsage) {
+  async settle(requestId: string, record: ModelUsage) {
     await changeJob(this.runId, this.execution, async job => {
       if (!job.snapshot.usage.some(usage => usage.requestId === requestId)) throw new ReviewConflict("Request reservation missing");
       job.snapshot.usage = job.snapshot.usage.map(usage => usage.requestId === requestId ? record : usage);
     });
   }
-  override async release(requestId: string) {
+  async release(requestId: string) {
     await changeJob(this.runId, this.execution, async job => { job.snapshot.usage = job.snapshot.usage.filter(usage => usage.requestId !== requestId); });
   }
 }

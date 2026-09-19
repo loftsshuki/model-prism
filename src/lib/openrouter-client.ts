@@ -1,5 +1,5 @@
 import { getModel } from "./model-catalog";
-import { BudgetExceededError, requestCeiling, requestCost, RunBudget } from "./run-budget";
+import { BudgetExceededError, requestCeiling, requestCost, type RequestBudget } from "./run-budget";
 import type { ModelInfo, ModelUsage } from "./types";
 
 export interface ToolCall { id: string; type: "function"; function: { name: string; arguments: string } }
@@ -36,7 +36,7 @@ export interface CompletionOptions {
   temperature?: number;
   reasoningEffort?: string;
   signal?: AbortSignal;
-  budget?: RunBudget;
+  budget?: RequestBudget;
   onUsage?: (usage: ModelUsage) => void;
   onText?: (text: string) => void;
   maxAttempts?: number;

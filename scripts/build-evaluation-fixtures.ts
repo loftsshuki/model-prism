@@ -1,12 +1,15 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import type { EvaluationFixture } from "../src/lib/evaluation";
 
 const before = "a39d3480e2d5c5524e661fedb00c57f03251ef05";
 const after = "05c3f886be57c4ae83423dfc9d42fad35cc4aa1a";
 const fixtures: EvaluationFixture[] = [];
+const gitBinary = process.env.GIT_BIN ?? (process.platform === "win32" ? "C:/Program Files/Git/cmd/git.exe" : "/usr/bin/git");
+if (!isAbsolute(gitBinary) || !existsSync(gitBinary)) throw new Error("Set GIT_BIN to the absolute path of your trusted Git executable");
 function source(commit: string, path: string, from: string, until?: string) {
-  const text = execFileSync("git", ["show", `${commit}:${path}`], { encoding: "utf8" }).replaceAll("\r\n", "\n");
+  const text = execFileSync(gitBinary, ["show", `${commit}:${path}`], { encoding: "utf8", timeout: 10000 }).replaceAll("\r\n", "\n");
   const start = text.indexOf(from), end = until ? text.indexOf(until, start + from.length) : text.length;
   if (start < 0 || end < start) throw new Error(`Source anchors not found: ${path}:${from}`);
   return { path, text: text.slice(start, end).trimEnd(), startLine: text.slice(0, start).split("\n").length };

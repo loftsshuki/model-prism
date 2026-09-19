@@ -1,7 +1,7 @@
 import pLimit from "p-limit";
 import { DEFAULT_FALLBACK_ID, FREE_FALLBACK_IDS, getModel, detectFamily, SNAPSHOT_MODELS } from "./model-catalog";
 import { abortError, isCancelled, ProviderError, requestCompletion } from "./openrouter-client";
-import type { RunBudget } from "./run-budget";
+import type { RequestBudget } from "./run-budget";
 import type { ModelInfo, ModelResponse, ModelUsage } from "./types";
 
 export interface FanOutParams {
@@ -15,7 +15,7 @@ export interface FanOutParams {
   maxAttempts?: number;
   isAborted: () => boolean;
   signal?: AbortSignal;
-  budget?: RunBudget;
+  budget?: RequestBudget;
   reasoningEffort?: string;
   allowPaidFallback?: boolean;
   onUsage?: (usage: ModelUsage) => void;
