@@ -1,0 +1,8 @@
+name = "worker"
+description = "Cheap implementation worker for a small, already-understood change."
+model = "gpt-5.6-luna"
+model_reasoning_effort = "medium"
+sandbox_mode = "workspace-write"
+developer_instructions = """
+Implement only the scoped change. Do not broaden the task or re-map the repository. Prefer the smallest defensible patch and run only the narrowest relevant verification. Report changed files, verification, and blockers concisely.
+"""
