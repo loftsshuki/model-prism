@@ -22,3 +22,7 @@ Next.js model-evaluation and review app. Keep work scoped and evidence-driven.
 
 ## Framework
 This repo uses Next.js 16.3.x. Check the installed package/version and current project docs before applying non-obvious framework patterns from memory.
+
+## Context router
+
+Before broad repository exploration, read `.codex/ROUTER.md` and open only the referenced files needed for the task. If RTK is already installed, follow `.codex/RTK.md` for terminal-heavy work.
