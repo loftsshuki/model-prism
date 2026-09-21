@@ -117,7 +117,7 @@ export async function evaluatePreReviewDepth(input: GateInput): Promise<{
     const completed = new Set(input.snapshot.responses.filter(response => response.status === "complete").map(response => response.requestedModel ?? response.model));
     const target = resolved.count >= input.snapshot.models.length
       ? input.snapshot.models.map(model => model.id)
-      : input.snapshot.models.slice(0, resolved.count).map(model => model.id);
+      : currentIds.slice(0, resolved.count);
     const initialIds = input.snapshot.models.map(model => model.id).filter(id => target.includes(id) || completed.has(id));
 
     return {
