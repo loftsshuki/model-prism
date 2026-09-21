@@ -145,6 +145,7 @@ export async function startBackgroundReview(input: BackgroundReviewInput, owner:
       synthesis: invalidated && !input.secondPass ? undefined : previous?.synthesis,
       secondPass: invalidated ? undefined : previous?.secondPass, contextMetadata: input.contextMetadata, sources: input.sources,
       projectKey: input.projectKey, baselineRunId: input.baselineRunId,
+      decisionModes: input.decisionModes, decisionGates: previous?.decisionGates ?? [],
       background: { execution, state: "queued", phase: "Queued" },
       adaptive: { enabled: input.adaptive, initialIds, escalatedIds: [], reasons: input.risk === "high" ? ["High-risk review uses the full selected council"] : [] },
     };
