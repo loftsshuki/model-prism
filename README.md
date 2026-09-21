@@ -29,6 +29,7 @@ It is used both as:
 - Provides CLI plan review with cost/quorum safeguards
 - Runs durable background reviews that continue when a tab closes, with a database-enforced spending ledger and explicit stop/resume
 - Offers an opt-in adaptive council: three initial reviewers, escalation for unresolved concerns, and a full council for high-risk work
+- Adds Jev decision gates to background reviews with per-gate Off / Shadow / Assist / Enforce modes, persisted decisions, confidence, latency, and gateway cost
 - Checks model freshness daily on Vercel, independently of GitHub Actions
 
 Live app: [model-prism.vercel.app](https://model-prism.vercel.app).
@@ -67,6 +68,10 @@ Server-side storage uses Neon/Postgres:
 DATABASE_URL=postgres://...
 MODEL_PRISM_ENCRYPTION_KEY=<64 hexadecimal characters from a cryptographic random generator>
 CRON_SECRET=<a separate random secret>
+# Optional master kill switch. Defaults to enabled when a review selects a Jev mode.
+MODEL_PRISM_JEV_ENABLED=true
+# Optional for local/non-Vercel execution. Vercel deployments use project OIDC automatically.
+AI_GATEWAY_API_KEY=
 ```
 
 Optional API protection for history/save routes:
@@ -76,6 +81,8 @@ MODEL_PRISM_ADMIN_TOKEN=choose-a-long-random-token
 ```
 
 When `MODEL_PRISM_ADMIN_TOKEN` is set, users must enter the same value in Settings so requests include `x-model-prism-token`.
+
+Background reviews can use TypeSafe AI's Jev through Vercel AI Gateway. Each review independently chooses **Off**, **Shadow**, **Assist**, or **Enforce** for pre-review depth and post-synthesis escalation. Shadow records only. Assist may add scrutiny but never removes deterministic safeguards. Enforce may reduce adaptive work only when Jev is confidently negative; explicit high-risk reviews, low reviewer quorum, high-impact findings, and unverified evidence remain deterministic hard safeguards. Jev requests use Zero Data Retention and are restricted to the TypeSafe AI provider.
 
 ## Scripts
 
