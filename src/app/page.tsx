@@ -295,7 +295,7 @@ export default function Home() {
                   <label className="block">Pre-review depth<select className={field} value={preReviewMode} onChange={event => setPreReviewMode(event.target.value as DecisionMode)}>{(["off","shadow","assist","enforce"] as const).map(mode => <option key={mode} value={mode}>{mode}</option>)}</select></label>
                   <label className="block">Post-synthesis escalation<select className={field} value={escalationMode} onChange={event => setEscalationMode(event.target.value as DecisionMode)}>{(["off","shadow","assist","enforce"] as const).map(mode => <option key={mode} value={mode}>{mode}</option>)}</select></label>
                 </div>}
-                <p className="text-xs text-grey-50">Shadow only records Jev's judgment. Assist may add scrutiny but cannot remove deterministic safeguards. Enforce may reduce adaptive work only on high-confidence, standard-risk cases; explicit High risk still uses the full council.</p>
+                <p className="text-xs text-grey-50">Shadow only records Jev&apos;s judgment. Assist may add scrutiny but cannot remove deterministic safeguards. Enforce may reduce adaptive work only on high-confidence, standard-risk cases; explicit High risk still uses the full council.</p>
               </div>
               {adaptive && <p className="text-xs text-grey-50">Adaptive escalation may require a second synthesis and cost more than a fixed council. Your spending limit still applies.</p>}</>}
             </div>}
