@@ -58,7 +58,7 @@ export async function evaluatePreReviewDepth(input: GateInput): Promise<{
   const prior = existingGate(input.snapshot, "pre-review-depth", input.execution);
   if (prior) return { initialIds: currentIds };
 
-  const mode = input.config.decisionModes.preReview;
+  const mode = input.config.decisionModes?.preReview ?? "assist";
   if (mode === "off") return { initialIds: currentIds };
 
   const deterministicDecision = `${currentIds.length}-reviewers`;
@@ -154,7 +154,7 @@ export async function evaluatePostSynthesisEscalation(input: GateInput, determin
   const prior = existingGate(input.snapshot, "post-synthesis-escalation", input.execution);
   if (prior) return { escalate: prior.effectiveDecision === "escalate" };
 
-  const mode = input.config.decisionModes.escalation;
+  const mode = input.config.decisionModes?.escalation ?? "assist";
   if (mode === "off" || !input.snapshot.synthesis) return { escalate: deterministic };
 
   const deterministicDecision = deterministic ? "escalate" : "stop";
