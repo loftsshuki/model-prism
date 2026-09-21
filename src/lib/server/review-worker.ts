@@ -18,7 +18,7 @@ export async function prepareReview(runId: string, execution: number, workflowId
     if (decision.record || decision.initialIds.join("\0") !== job.snapshot.adaptive!.initialIds.join("\0")) {
       await changeJob(runId, execution, async active => {
         if (decision.record && !active.snapshot.decisionGates?.some(record => record.key === decision.record!.key && record.execution === execution)) {
-          active.snapshot.decisionGates = [...(active.snapshot.decisionGates ?? []), decision.record].slice(-200);
+          active.snapshot.decisionGates = [...(active.snapshot.decisionGates ?? []), decision.record!].slice(-200);
         }
         if (decision.initialIds.length) active.snapshot.adaptive!.initialIds = decision.initialIds;
         if (decision.record && ["expanded", "reduced"].includes(decision.record.action)) {
