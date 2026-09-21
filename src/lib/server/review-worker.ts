@@ -4,13 +4,34 @@ import { synthesizeViaOpenRouter } from "../synthesis";
 import { fetchModelCatalog } from "../model-catalog";
 import { escalationReasons } from "../review-policy";
 import { decryptCredential } from "./credentials";
+import { evaluatePostSynthesisEscalation, evaluatePreReviewDepth } from "./review-decision-gates";
 import { beginOperation, changeJob, claimWorkflow, finishOperation, jobIsActive, loadWorkerJob, PersistentRunBudget, setJobState, type WorkerJob } from "./background-store";
 import { recordFindings } from "./finding-store";
 
 export async function prepareReview(runId: string, execution: number, workflowId: string) {
   "use step";
   if (!await claimWorkflow(runId, execution, workflowId)) return null;
-  const job = await loadWorkerJob(runId);
+  let job = await loadWorkerJob(runId);
+
+  if (!job.config.secondPass) {
+    const decision = await evaluatePreReviewDepth({ snapshot: job.snapshot, config: job.config, execution });
+    if (decision.record || decision.initialIds.join("\0") !== job.snapshot.adaptive!.initialIds.join("\0")) {
+      await changeJob(runId, execution, async active => {
+        if (decision.record && !active.snapshot.decisionGates?.some(record => record.key === decision.record!.key && record.execution === execution)) {
+          active.snapshot.decisionGates = [...(active.snapshot.decisionGates ?? []), decision.record].slice(-200);
+        }
+        if (decision.initialIds.length) active.snapshot.adaptive!.initialIds = decision.initialIds;
+        if (decision.record && ["expanded", "reduced"].includes(decision.record.action)) {
+          active.snapshot.adaptive!.reasons = [...new Set([
+            ...active.snapshot.adaptive!.reasons,
+            `Jev ${decision.record.mode} pre-review gate ${decision.record.action} the initial council to ${decision.initialIds.length} reviewer(s)`,
+          ])];
+        }
+      });
+      job = await loadWorkerJob(runId);
+    }
+  }
+
   return { initialIds: job.snapshot.adaptive!.initialIds, secondPass: job.config.secondPass };
 }
 function keyFor(job: WorkerJob) {
@@ -121,12 +142,29 @@ export async function planEscalation(runId: string, execution: number) {
   "use step";
   const job = await loadWorkerJob(runId);
   if (job.execution !== execution || job.cancelRequested || !job.config.adaptive || !job.snapshot.synthesis) return [];
+
   const reasons = escalationReasons(job.snapshot.synthesis, job.snapshot.responses.filter(response => response.status === "complete").length, job.config.risk);
-  const additional = reasons.length ? job.snapshot.models.filter(model => !job.snapshot.adaptive!.initialIds.includes(model.id) && !job.snapshot.adaptive!.escalatedIds.includes(model.id)).map(model => model.id) : [];
+  const decision = await evaluatePostSynthesisEscalation({ snapshot: job.snapshot, config: job.config, execution }, reasons);
+  const additional = decision.escalate
+    ? job.snapshot.models.filter(model => !job.snapshot.adaptive!.initialIds.includes(model.id) && !job.snapshot.adaptive!.escalatedIds.includes(model.id)).map(model => model.id)
+    : [];
+
   await changeJob(runId, execution, async active => {
-    active.snapshot.adaptive!.reasons = [...new Set([...active.snapshot.adaptive!.reasons, ...reasons])];
+    if (decision.record && !active.snapshot.decisionGates?.some(record => record.key === decision.record!.key && record.execution === execution)) {
+      active.snapshot.decisionGates = [...(active.snapshot.decisionGates ?? []), decision.record].slice(-200);
+    }
+    const jevReason = decision.record?.action === "expanded"
+      ? [`Jev ${decision.record.mode} escalation gate requested additional independent review`]
+      : decision.record?.action === "suppressed"
+        ? [`Jev enforce gate suppressed soft escalation; hard deterministic safeguards still win`]
+        : [];
+    active.snapshot.adaptive!.reasons = [...new Set([...active.snapshot.adaptive!.reasons, ...reasons, ...jevReason])];
     active.snapshot.adaptive!.escalatedIds = [...new Set([...active.snapshot.adaptive!.escalatedIds, ...additional])];
-    if (additional.length) { active.snapshot.synthesis = undefined; active.snapshot.status = "running"; active.snapshot.background!.phase = "Adding reviewers to investigate unresolved concerns"; }
+    if (additional.length) {
+      active.snapshot.synthesis = undefined;
+      active.snapshot.status = "running";
+      active.snapshot.background!.phase = "Adding reviewers to investigate unresolved concerns";
+    }
   });
   return additional;
 }
