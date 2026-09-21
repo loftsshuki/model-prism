@@ -22,6 +22,7 @@ import { CompareView } from "@/components/compare-view";
 import { FindingTracker } from "@/components/finding-tracker";
 import { diffSourceDocuments } from "@/lib/finding-tracking";
 import type { SourceDocument } from "@/lib/review-policy";
+import { DEFAULT_DECISION_MODES, type DecisionMode } from "@/lib/decision-gate";
 
 const field = "mt-1 w-full min-w-0 border border-border bg-white px-3 py-2.5 text-sm text-ink focus:border-green";
 const button = "min-h-11 border border-border px-3 py-2 text-sm text-green hover:bg-green-light disabled:opacity-50";
@@ -47,6 +48,9 @@ export default function Home() {
   const [background, setBackground] = useState(false);
   const [adaptive, setAdaptive] = useState(false);
   const [risk, setRisk] = useState<"standard" | "high">("standard");
+  const [jevEnabled, setJevEnabled] = useState(true);
+  const [preReviewMode, setPreReviewMode] = useState<DecisionMode>(DEFAULT_DECISION_MODES.preReview);
+  const [escalationMode, setEscalationMode] = useState<DecisionMode>(DEFAULT_DECISION_MODES.escalation);
   const [projectKey, setProjectKey] = useState("default");
   const [sourceDocuments, setSourceDocuments] = useState<SourceDocument[]>([]);
   const [sourceContent, setSourceContent] = useState("");
@@ -154,6 +158,9 @@ export default function Home() {
     setMobileTab("results");
     setSourceDocuments(snapshot.sources ?? []); setSourceContent(snapshot.content);
     setProjectKey(snapshot.projectKey ?? "default"); setAdaptive(snapshot.adaptive?.enabled ?? false);
+    const restoredModes = snapshot.decisionModes ?? DEFAULT_DECISION_MODES;
+    setPreReviewMode(restoredModes.preReview); setEscalationMode(restoredModes.escalation);
+    setJevEnabled(restoredModes.preReview !== "off" || restoredModes.escalation !== "off");
     if (snapshot.background) setBackground(true);
   }
   async function start(secondPass = false, extraIds: string[] = []) {
@@ -184,7 +191,12 @@ export default function Home() {
         ...(contextEnabled && activePack && restoredContext === null ? activePack.selectedFiles.map(path => ({ id: `file:${path}`, path, text: fileContents[path] })) : []),
       ].filter((source, index, all) => all.findIndex(item => item.id === source.id) === index);
       await review.start({ ...input, apiKey, models, catalog: currentModels, synthesisModel: SYNTHESIS_IDS[synthesisModel], maxCost, maxTokens, synthesisMaxTokens, allowPaidFallback: allowFallback,
-        background, adaptive: background && adaptive, risk, sources,
+        background, adaptive: background && adaptive, risk,
+        decisionModes: {
+          preReview: background && jevEnabled ? preReviewMode : "off",
+          escalation: background && jevEnabled ? escalationMode : "off",
+        },
+        sources,
         baselineRunId: sameInput ? review.run?.baselineRunId : (review.run?.projectKey ?? "default") === effectiveProjectKey ? review.run?.id : undefined,
         contextMetadata: activePack && contextEnabled ? JSON.stringify({ packId: activePack.id, packName: activePack.name, repo: activePack.repo, branch: activePack.branch, files: activePack.selectedFiles }) : undefined, secondPass });
     } catch (failure) { setError(failure instanceof Error ? failure.message : "Unable to start review"); }
@@ -277,7 +289,15 @@ export default function Home() {
               <p className="text-xs text-grey-50">Background reviews encrypt your provider key on the server for this run. It expires after 24 hours and is cleared when the run ends or during daily cleanup. Progress and spending remain in private History.</p>
               {background && <><label className="flex gap-2 items-start"><input type="checkbox" checked={adaptive} onChange={event => setAdaptive(event.target.checked)} className="mt-1" />Adaptive council: start with three reviewers, then add selected reviewers when concerns remain.</label>
               <label className="block">Review risk<select className={field} value={risk} onChange={event => setRisk(event.target.value as "standard" | "high")}><option value="standard">Standard</option><option value="high">High — always use every selected reviewer</option></select></label>
-              {adaptive && <p className="text-xs text-grey-50">Experimental. Escalation may require a second synthesis and cost more than a fixed council. Your spending limit still applies.</p>}</>}
+              <div className="border-t border-border pt-3 space-y-3">
+                <label className="flex gap-2 items-start"><input type="checkbox" checked={jevEnabled} onChange={event => setJevEnabled(event.target.checked)} className="mt-1" />Use Jev decision gates for this background review.</label>
+                {jevEnabled && <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="block">Pre-review depth<select className={field} value={preReviewMode} onChange={event => setPreReviewMode(event.target.value as DecisionMode)}>{(["off","shadow","assist","enforce"] as const).map(mode => <option key={mode} value={mode}>{mode}</option>)}</select></label>
+                  <label className="block">Post-synthesis escalation<select className={field} value={escalationMode} onChange={event => setEscalationMode(event.target.value as DecisionMode)}>{(["off","shadow","assist","enforce"] as const).map(mode => <option key={mode} value={mode}>{mode}</option>)}</select></label>
+                </div>}
+                <p className="text-xs text-grey-50">Shadow only records Jev's judgment. Assist may add scrutiny but cannot remove deterministic safeguards. Enforce may reduce adaptive work only on high-confidence, standard-risk cases; explicit High risk still uses the full council.</p>
+              </div>
+              {adaptive && <p className="text-xs text-grey-50">Adaptive escalation may require a second synthesis and cost more than a fixed council. Your spending limit still applies.</p>}</>}
             </div>}
             <p className="text-xs text-grey-50 leading-relaxed">The limit covers this run’s reviewers, synthesis, retries, and second pass. Unknown charges after an interrupted request reserve the full request ceiling. Provider billing may continue briefly after Stop. Reasoning uses the closest effort supported by each model.</p>
           </fieldset>
@@ -289,6 +309,7 @@ export default function Home() {
             {review.run.error && <p role="status" className="border border-gold bg-white p-3 text-sm">{review.run.error}</p>}
             {review.run.background && <p className="text-sm text-green" role="status">{review.run.background.phase}{["queued", "running"].includes(review.run.background.state) ? " · You can close this tab and return from History." : ""}</p>}
             {review.run.adaptive?.enabled && <p className="text-xs text-grey-50">Adaptive council · {review.run.adaptive.initialIds.length} initial reviewers · {review.run.adaptive.escalatedIds.length} added{review.run.adaptive.reasons.length ? ` · ${review.run.adaptive.reasons.join("; ")}` : ""}</p>}
+            {!!review.run.decisionGates?.length && <details className="border border-border bg-white p-3 text-xs"><summary className="cursor-pointer text-green">Jev decision gates · {review.run.decisionGates.length} recorded</summary><div className="mt-2 space-y-1">{review.run.decisionGates.map((gate, index) => <p key={`${gate.key}-${gate.execution}-${index}`}><strong>{gate.key}</strong> · {gate.mode} · {gate.deterministicDecision} → {gate.effectiveDecision} · {gate.action}{gate.selectedProbability !== undefined ? ` · p=${gate.selectedProbability.toFixed(2)}` : ""}{gate.costUsd !== undefined ? ` · ${gate.costUsd.toFixed(6)}` : ""}{gate.error ? ` · ${gate.error}` : ""}</p>)}</div></details>}
             <div className="flex flex-wrap gap-2">
               <button className={button} onClick={async () => { try { await navigator.clipboard.writeText(checkpointMarkdown(review.run!)); setCopied(true); } catch { setError("Clipboard unavailable. Open the saved review to export it."); } }}>{copied ? "Copied" : "Copy full review"}</button>
               {compareIds.size >= 2 && <button className={button} onClick={() => setShowCompare(true)}>Compare {compareIds.size} answers</button>}
