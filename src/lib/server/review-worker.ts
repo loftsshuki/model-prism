@@ -151,7 +151,7 @@ export async function planEscalation(runId: string, execution: number) {
 
   await changeJob(runId, execution, async active => {
     if (decision.record && !active.snapshot.decisionGates?.some(record => record.key === decision.record!.key && record.execution === execution)) {
-      active.snapshot.decisionGates = [...(active.snapshot.decisionGates ?? []), decision.record].slice(-200);
+      active.snapshot.decisionGates = [...(active.snapshot.decisionGates ?? []), decision.record!].slice(-200);
     }
     const jevReason = decision.record?.action === "expanded"
       ? [`Jev ${decision.record.mode} escalation gate requested additional independent review`]
