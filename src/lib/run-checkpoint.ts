@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ModelInfo, ModelResponse, ModelUsage, SynthesisResult } from "./types";
 import { jsonHeaders } from "./client-api";
-import { SourceDocumentSchema, type SourceDocument } from "./review-policy";
+import { SourceDocumentSchema, type SourceDocument } from "./review-policy";\nimport { DECISION_MODES, type DecisionGateRecord, type DecisionModes } from "./decision-gate";
 
 export interface ReviewInput {
   content: string; prompt: string; context: string; reasoningEffort: string;
