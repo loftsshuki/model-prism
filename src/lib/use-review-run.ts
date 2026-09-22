@@ -3,8 +3,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { executeReview, type ReviewOptions } from "./review-engine";
 import { loadLocalCheckpoint, sameReviewInput, saveLocalCheckpoint, saveRemoteCheckpoint, type RunCheckpoint } from "./run-checkpoint";
 import { jsonHeaders, prepareCloudAccess } from "./client-api";
+import type { DecisionModes } from "./decision-gate";
 
-type StartOptions = Omit<ReviewOptions, "signal" | "onChange" | "previous"> & { background?: boolean; adaptive?: boolean; risk?: "standard" | "high" };
+type StartOptions = Omit<ReviewOptions, "signal" | "onChange" | "previous"> & { background?: boolean; adaptive?: boolean; risk?: "standard" | "high"; decisionModes?: DecisionModes };
 const active = (run: RunCheckpoint) => !!run.background && ["queued", "running", "stopping"].includes(run.background.state);
 
 export function useReviewRun() {
@@ -93,7 +94,7 @@ export function useReviewRun() {
             id, content: options.content, prompt: options.prompt, context: options.context, reasoningEffort: options.reasoningEffort,
             modelIds: options.models.map(model => model.id), synthesisModel: options.synthesisModel,
             maxCost: options.maxCost, maxTokens: options.maxTokens, synthesisMaxTokens: options.synthesisMaxTokens,
-            adaptive: options.adaptive ?? false, risk: options.risk ?? "standard", allowPaidFallback: options.allowPaidFallback,
+            adaptive: options.adaptive ?? false, risk: options.risk ?? "standard", decisionModes: options.decisionModes, allowPaidFallback: options.allowPaidFallback,
             secondPass: options.secondPass ?? false, contextMetadata: options.contextMetadata,
             sources: previous?.background ? previous.sources : options.sources ?? [],
             projectKey: previous?.background ? previous.projectKey : options.projectKey ?? "default",

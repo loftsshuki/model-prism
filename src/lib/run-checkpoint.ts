@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ModelInfo, ModelResponse, ModelUsage, SynthesisResult } from "./types";
 import { jsonHeaders } from "./client-api";
 import { SourceDocumentSchema, type SourceDocument } from "./review-policy";
+import { DECISION_MODES, type DecisionGateRecord, type DecisionModes } from "./decision-gate";
 
 export interface ReviewInput {
   content: string; prompt: string; context: string; reasoningEffort: string;
@@ -19,6 +20,8 @@ export interface RunCheckpoint extends ReviewInput {
   adaptive?: { enabled: boolean; initialIds: string[]; escalatedIds: string[]; reasons: string[] };
   projectKey?: string;
   baselineRunId?: string;
+  decisionModes?: DecisionModes;
+  decisionGates?: DecisionGateRecord[];
 }
 
 export function sameReviewInput(a: ReviewInput, b: ReviewInput): boolean {
@@ -45,6 +48,15 @@ export const CheckpointSchema = z.object({
   background: z.object({ execution: z.number().int(), state: z.enum(["queued", "running", "stopping", "stopped", "complete", "error"]), phase: z.string().max(300) }).optional(),
   adaptive: z.object({ enabled: z.boolean(), initialIds: z.array(z.string()), escalatedIds: z.array(z.string()), reasons: z.array(z.string()) }).optional(),
   projectKey: z.string().max(200).optional(), baselineRunId: z.string().max(100).optional(),
+  decisionModes: z.object({ preReview: z.enum(DECISION_MODES), escalation: z.enum(DECISION_MODES) }).optional(),
+  decisionGates: z.array(z.object({
+    key: z.enum(["pre-review-depth", "post-synthesis-escalation"]), mode: z.enum(DECISION_MODES),
+    phase: z.string().max(100), execution: z.number().int().positive(), evaluatedAt: z.string().datetime(),
+    answer: z.record(z.string(), z.unknown()).optional(), selectedProbability: z.number().min(0).max(1).optional(),
+    deterministicDecision: z.string().max(200), effectiveDecision: z.string().max(200), action: z.string().max(100),
+    latencyMs: z.number().nonnegative().optional(), costUsd: z.number().finite().nonnegative().optional(),
+    generationId: z.string().max(200).optional(), error: z.string().max(1000).optional(),
+  })).max(200).optional(),
 });
 
 function openCheckpoints(): Promise<IDBDatabase> {

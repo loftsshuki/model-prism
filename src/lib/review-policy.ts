@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ModelInfo, SynthesisResult } from "./types";
+import { DECISION_MODES, DEFAULT_DECISION_MODES } from "./decision-gate";
 
 export const SourceDocumentSchema = z.object({
   id: z.string().regex(/^file:.+/).max(550), path: z.string().min(1).max(500), text: z.string().max(500_000),
@@ -9,6 +10,11 @@ export const SourceDocumentSchema = z.object({
 }).refine(source => !source.lineNumbers || source.lineNumbers.length === source.text.split("\n").length, "Source line map does not match the file");
 export type SourceDocument = z.infer<typeof SourceDocumentSchema>;
 
+export const DecisionModesSchema = z.object({
+  preReview: z.enum(DECISION_MODES).default(DEFAULT_DECISION_MODES.preReview),
+  escalation: z.enum(DECISION_MODES).default(DEFAULT_DECISION_MODES.escalation),
+}).default(DEFAULT_DECISION_MODES);
+
 export const BackgroundReviewSchema = z.object({
   id: z.string().regex(/^run_[a-zA-Z0-9_-]+$/).max(100),
   content: z.string().min(1).max(500_000), prompt: z.string().min(1).max(50_000), context: z.string().max(2_000_000).default(""),
@@ -17,6 +23,7 @@ export const BackgroundReviewSchema = z.object({
   synthesisModel: z.string().min(1).max(200), maxCost: z.number().finite().min(0.01).max(100),
   maxTokens: z.number().int().min(256).max(32768).default(8192), synthesisMaxTokens: z.number().int().min(256).max(65536).default(16384),
   adaptive: z.boolean().default(false), risk: z.enum(["standard", "high"]).default("standard"),
+  decisionModes: DecisionModesSchema,
   allowPaidFallback: z.boolean().default(false),
   secondPass: z.boolean().default(false), contextMetadata: z.string().max(20_000).optional(),
   projectKey: z.string().trim().min(1).max(200).default("default"), baselineRunId: z.string().max(100).optional(),
