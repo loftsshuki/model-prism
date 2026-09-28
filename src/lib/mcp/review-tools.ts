@@ -1,10 +1,11 @@
-/* eslint-disable */
 import { randomUUID } from "node:crypto";
 import { start } from "workflow/api";
 import { z } from "zod";
 import { listRuns, getRun } from "../db";
 import { COUNCIL_IDS, SYNTHESIS_IDS, fetchModelCatalog } from "../model-catalog";
 import { DEFAULT_TEMPLATES } from "../prompts";
+import { BackgroundReviewSchema } from "../review-policy";
+import type { RunCheckpoint } from "../run-checkpoint";
 import { startBackgroundReview, stopBackgroundReview } from "../server/background-store";
 import { loadMcpProviderCredential } from "../server/mcp-credential-store";
 import { backgroundReview } from "../../workflows/review";
@@ -109,17 +110,42 @@ function budgetFor(criticality: Criticality) {
 }
 
 function sourceDocuments(sources: z.infer<typeof SourceInputSchema>[]) {
-  return sources.map((source, index) => ({
-    id: `file:${source.path}:${index}`,
-    path: source.path,
-    text: source.text,
-    repo: source.repo,
-    commit: source.commit,
-    ...(source.startLine
-      ? { lineNumbers: source.text.split("\n").map((_, offset) => source.startLine! + offset) }
-      : {}),
-  }));
+  return sources.map((source, index) => {
+    const lineNumbers = source.startLine === undefined
+      ? undefined
+      : source.text.split("\n").map((_, offset) => source.startLine as number + offset);
+    return {
+      id: `file:${source.path}:${index}`,
+      path: source.path,
+      text: source.text,
+      ...(source.repo ? { repo: source.repo } : {}),
+      ...(source.commit ? { commit: source.commit } : {}),
+      ...(lineNumbers ? { lineNumbers } : {}),
+    };
+  });
 }
+
+type ReviewRunRecord = {
+  id: string;
+  created_at: string | Date;
+  total_cost: number;
+  snapshot: RunCheckpoint | null;
+  context_metadata?: unknown;
+  models: unknown;
+  responses: unknown[];
+  synthesis: unknown;
+  synthesisModel: unknown;
+};
+
+type ReviewListRow = {
+  id: unknown;
+  context_metadata: unknown;
+  background: unknown;
+  created_at: unknown;
+  total_cost: unknown;
+  has_synthesis: unknown;
+  response_count: unknown;
+};
 
 async function liveProviderKey(owner: string) {
   const apiKey = await loadMcpProviderCredential(owner);
@@ -148,7 +174,7 @@ export async function submitReview(owner: string, input: unknown) {
     invokedBy: "model-prism-mcp",
     projectKey: parsed.projectKey,
   });
-  const job = await startBackgroundReview({
+  const review = BackgroundReviewSchema.parse({
     id: reviewId,
     content: parsed.content,
     prompt: planPrompt(parsed.artifactType, parsed.additionalInstructions),
@@ -167,7 +193,8 @@ export async function submitReview(owner: string, input: unknown) {
     contextMetadata: metadata,
     projectKey: parsed.projectKey,
     sources: sourceDocuments(parsed.sources),
-  }, owner, apiKey, catalog, randomUUID());
+  });
+  const job = await startBackgroundReview(review, owner, apiKey, catalog, randomUUID());
 
   if (job.started) {
     try { await start(backgroundReview, [job.id, job.execution]); }
@@ -184,7 +211,7 @@ export async function submitReview(owner: string, input: unknown) {
     }
   }
 
-  const run = await getRun(job.id, owner);
+  const run = await getRun(job.id, owner) as unknown as ReviewRunRecord | null;
   return {
     reviewId: job.id,
     state: run?.snapshot?.background?.state ?? "queued",
@@ -199,7 +226,7 @@ export async function submitReview(owner: string, input: unknown) {
 
 export async function getReviewResult(owner: string, input: unknown) {
   const parsed = GetReviewSchema.parse(input);
-  const run = await getRun(parsed.reviewId, owner);
+  const run = await getRun(parsed.reviewId, owner) as unknown as ReviewRunRecord | null;
   if (!run) throw new Error("Review not found");
   const snapshot = run.snapshot;
   return {
@@ -222,12 +249,14 @@ export async function getReviewResult(owner: string, input: unknown) {
 
 export async function listReviewResults(owner: string, input: unknown) {
   const parsed = ListReviewsSchema.parse(input);
-  const rows = await listRuns(owner);
+  const rows = await listRuns(owner) as unknown as ReviewListRow[];
   return rows.slice(0, parsed.limit).map(row => {
     const metadata = typeof row.context_metadata === "string"
       ? (() => { try { return JSON.parse(row.context_metadata); } catch { return {}; } })()
       : {};
-    const background = row.background as { state?: string; phase?: string } | null;
+    const background = row.background && typeof row.background === "object"
+      ? row.background as { state?: string; phase?: string }
+      : null;
     return {
       reviewId: String(row.id),
       title: typeof metadata.title === "string" ? metadata.title : "Model Prism review",
