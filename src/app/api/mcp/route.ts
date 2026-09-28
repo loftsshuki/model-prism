@@ -5,7 +5,7 @@ import { MCP_TOOLS, invokeMcpTool } from "@/lib/mcp/review-tools";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const PROTOCOL_VERSION = "2026-07-28";
+const PROTOCOL_VERSION = "2025-06-18";
 type RpcId = string | number | null;
 
 function jsonRpc(id: RpcId, result: unknown, status = 200) {
@@ -88,8 +88,9 @@ export async function POST(req: NextRequest) {
 
   if (method === "initialize") {
     const requested = typeof params.protocolVersion === "string" ? params.protocolVersion : PROTOCOL_VERSION;
+    const protocolVersion = requested === PROTOCOL_VERSION ? requested : PROTOCOL_VERSION;
     return jsonRpc(id, {
-      protocolVersion: requested || PROTOCOL_VERSION,
+      protocolVersion,
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: "model-prism", version: "1.0.0" },
       instructions: "Model Prism runs durable multi-model council reviews. Use review_plan for a frozen artifact, then poll get_review until the review is complete.",
