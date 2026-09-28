@@ -5,7 +5,7 @@ Read before broad exploration; open only what the task needs.
 - App/routes/UI → locate the affected Next.js route/component first
 - Evaluation/review workflow → search `review`, `evaluate`, and workflow call sites before broad reads
 - Model catalog/refresh → `scripts/refresh-model-catalog.ts` and related model data
-- Account/background persistence → `scripts/verify-account-store.ts`, `scripts/verify-background-store.ts`, and their imported stores
+- Account/background persistence → `scripts/verify-account-store.ts`, `scripts/verify-background-store.ts`, and their imported stores\n- MCP / ChatGPT Review Fabric → `docs/MCP_INTEGRATION.md`, `src/app/api/mcp/route.ts`, `src/lib/mcp/review-tools.ts`, `src/lib/server/mcp-credential-store.ts`
 - Workflow verification → `scripts/verify-workflow.mjs`
 - Commands/dependencies → `package.json`
 - Browser tests → Playwright config/tests only when the affected flow requires them

@@ -14,6 +14,13 @@ export async function signedInOwner(): Promise<string | null> {
   return userId ? accountOwner(userId) : null;
 }
 
+export async function oauthOwner(): Promise<string | null> {
+  if (!process.env.CLERK_SECRET_KEY || !process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) return null;
+  const { auth } = await import("@clerk/nextjs/server");
+  const { userId } = await auth({ acceptsToken: "oauth_token" });
+  return userId ? accountOwner(userId) : null;
+}
+
 export async function requestOwner(req: NextRequest): Promise<string | null> {
   const account = await signedInOwner();
   if (account) return account;
