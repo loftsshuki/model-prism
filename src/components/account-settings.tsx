@@ -15,7 +15,7 @@ export function AccountSettings() {
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentMessage, setAgentMessage] = useState("");
   useEffect(() => {
-    if (!userId) { setAgentAccess(null); return; }
+    if (!userId) return;
     let mounted = true;
     void fetch("/api/account/mcp-credential", { headers: jsonHeaders(), cache: "no-store" })
       .then(async response => {
