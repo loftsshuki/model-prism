@@ -6,6 +6,8 @@ import { useAccount } from "./account-session";
 
 type ImportStatus = { reviews: number; hooks: number; telemetry: number; active: number; imported: boolean };
 type AgentAccessStatus = { enabled: boolean; provider?: "openrouter"; keyLast4?: string; verifiedAt?: string; updatedAt?: string };
+type ServiceTokenStatus = { tokenId: string; label: string; scopes: string[]; createdAt: string; lastUsedAt: string | null };
+type CreatedServiceToken = ServiceTokenStatus & { token: string };
 export function AccountSettings() {
   const { enabled, userId } = useAccount();
   const [preview, setPreview] = useState<ImportStatus | null>(null);
@@ -14,6 +16,10 @@ export function AccountSettings() {
   const [agentAccess, setAgentAccess] = useState<AgentAccessStatus | null>(null);
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentMessage, setAgentMessage] = useState("");
+  const [serviceTokens, setServiceTokens] = useState<ServiceTokenStatus[]>([]);
+  const [createdServiceToken, setCreatedServiceToken] = useState<CreatedServiceToken | null>(null);
+  const [serviceBusy, setServiceBusy] = useState(false);
+  const [serviceMessage, setServiceMessage] = useState("");
   useEffect(() => {
     if (!userId) return;
     let mounted = true;
@@ -24,6 +30,13 @@ export function AccountSettings() {
         if (mounted) setAgentAccess(data);
       })
       .catch(() => { if (mounted) setAgentAccess(null); });
+    void fetch("/api/account/review-service-tokens", { headers: jsonHeaders(), cache: "no-store" })
+      .then(async response => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error ?? "Unable to read service tokens");
+        if (mounted) setServiceTokens(Array.isArray(data.tokens) ? data.tokens : []);
+      })
+      .catch(() => { if (mounted) setServiceTokens([]); });
     return () => { mounted = false; };
   }, [userId]);
 
@@ -45,6 +58,62 @@ export function AccountSettings() {
         : "Agent review access revoked.");
     } catch (error) { setAgentMessage(error instanceof Error ? error.message : "Unable to update agent access"); }
     finally { setAgentBusy(false); }
+  }
+
+  async function createHossServiceToken() {
+    setServiceBusy(true); setServiceMessage(""); setCreatedServiceToken(null);
+    try {
+      const response = await fetch("/api/account/review-service-tokens", {
+        method: "POST",
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          label: "HOSS",
+          scopes: ["reviews:start", "reviews:read", "reviews:stop"],
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Unable to create HOSS service token");
+      const created: CreatedServiceToken = {
+        tokenId: data.tokenId,
+        token: data.token,
+        label: data.label,
+        scopes: data.scopes,
+        createdAt: data.createdAt,
+        lastUsedAt: null,
+      };
+      setCreatedServiceToken(created);
+      setServiceTokens(current => [
+        {
+          tokenId: created.tokenId,
+          label: created.label,
+          scopes: created.scopes,
+          createdAt: created.createdAt,
+          lastUsedAt: null,
+        },
+        ...current.filter(item => item.tokenId !== created.tokenId),
+      ]);
+      setServiceMessage("HOSS service token created. Copy it now; only its hash is stored by Model Prism.");
+    } catch (error) {
+      setServiceMessage(error instanceof Error ? error.message : "Unable to create HOSS service token");
+    } finally { setServiceBusy(false); }
+  }
+
+  async function revokeHossServiceToken(tokenId: string) {
+    setServiceBusy(true); setServiceMessage("");
+    try {
+      const response = await fetch("/api/account/review-service-tokens", {
+        method: "DELETE",
+        headers: jsonHeaders(),
+        body: JSON.stringify({ tokenId }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Unable to revoke service token");
+      setServiceTokens(current => current.filter(item => item.tokenId !== tokenId));
+      if (createdServiceToken?.tokenId === tokenId) setCreatedServiceToken(null);
+      setServiceMessage("HOSS service token revoked.");
+    } catch (error) {
+      setServiceMessage(error instanceof Error ? error.message : "Unable to revoke service token");
+    } finally { setServiceBusy(false); }
   }
 
   async function importHistory(apply: boolean) {
@@ -83,6 +152,29 @@ export function AccountSettings() {
         </div>
         {agentAccess?.enabled && <p className="text-xs text-grey-50">MCP endpoint: <code>https://model-prism.vercel.app/api/mcp</code></p>}
         {agentMessage && <output className="block text-sm">{agentMessage}</output>}
+      </div>
+      <div className="border-t border-border pt-4 space-y-3">
+        <h3 className="font-medium text-sm">HOSS / service review access</h3>
+        <p className="text-xs text-grey-50">Create a revocable machine token for HOSS to start and read Model Prism council runs without using your Clerk browser session. HOSS receives this token only; your OpenRouter credential stays encrypted inside Model Prism.</p>
+        {!agentAccess?.enabled && <p className="text-xs text-amber-900">Enable agent review access above before creating a HOSS token.</p>}
+        <button disabled={serviceBusy || !agentAccess?.enabled} onClick={() => void createHossServiceToken()} className="min-h-11 border border-border px-3 text-sm text-green disabled:opacity-50">{serviceBusy ? "Working…" : "Create HOSS service token"}</button>
+        {createdServiceToken && <div className="border border-border bg-grey-5 p-3 space-y-2">
+          <p className="text-xs font-medium">Copy this token now. It will not be shown again.</p>
+          <code className="block break-all text-xs">{createdServiceToken.token}</code>
+          <button onClick={() => void navigator.clipboard.writeText(createdServiceToken.token)} className="min-h-10 border border-border px-3 text-xs text-green">Copy token</button>
+        </div>}
+        {serviceTokens.length > 0 && <div className="space-y-2">
+          {serviceTokens.map(token => <div key={token.tokenId} className="border border-border p-3 text-xs space-y-1">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <strong>{token.label}</strong>
+              <button disabled={serviceBusy} onClick={() => void revokeHossServiceToken(token.tokenId)} className="text-red-500 disabled:opacity-50">Revoke</button>
+            </div>
+            <p className="text-grey-50">{token.scopes.join(" · ")}</p>
+            <p className="text-grey-50">Last used: {token.lastUsedAt ? new Date(token.lastUsedAt).toLocaleString() : "never"}</p>
+          </div>)}
+        </div>}
+        <p className="text-xs text-grey-50">Service endpoint: <code>https://model-prism.vercel.app/api/review-fabric/v1/reviews</code></p>
+        {serviceMessage && <output className="block text-sm">{serviceMessage}</output>}
       </div>
       <p className="text-xs text-grey-50">Reviews created before private key access require the deployment owner to verify ownership and recover selected records. They are retained privately.</p>
       <p className="text-xs text-grey-50">Signing out clears keys and cached review/source data on this device. Reviews saved to your account stay in History.</p>
