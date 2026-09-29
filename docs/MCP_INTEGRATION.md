@@ -135,6 +135,118 @@ After the deployment is live and the Clerk CIMD setting is enabled:
 
 A new ChatGPT session should then expose the Model Prism tools.
 
+## HOSS service-to-service Review Fabric
+
+Interactive MCP OAuth remains the user-facing path. Unattended HOSS reviews use a separate owner-bound service token instead of automating a Clerk browser session.
+
+### Create the token
+
+A signed-in Model Prism account with agent review access enabled can create a HOSS token from **Settings → HOSS / service review access**.
+
+The plaintext token is shown once and uses the form:
+
+~~~text
+mp_svc_<high-entropy-secret>
+~~~
+
+Model Prism stores only the token hash, owner binding, label, scopes, creation time, last-used time, and revocation time. HOSS stores the plaintext token only in host secret configuration.
+
+Scopes are:
+
+~~~text
+reviews:start
+reviews:read
+reviews:stop
+~~~
+
+Revoking the service token does not delete completed reviews.
+
+### Service API
+
+Start:
+
+~~~http
+POST /api/review-fabric/v1/reviews
+Authorization: Bearer mp_svc_...
+Idempotency-Key: <ReviewRequest.idempotencyKey>
+Content-Type: application/json
+~~~
+
+The body is a strict envelope:
+
+~~~json
+{
+  "request": {
+    "schemaVersion": 1,
+    "requestId": "review-request:<sha256>",
+    "artifactId": "review-artifact:<sha256>",
+    "artifactContentSha256": "<sha256>",
+    "provider": "model-prism",
+    "projectId": "hoss",
+    "repository": "loftsshuki/HOSS",
+    "artifactType": "implementation_plan",
+    "criticality": "medium",
+    "contextCapsuleId": "ctx_...",
+    "contextSha256": "<sha256>",
+    "repositoryBasis": {
+      "commitSha": "<40-char-git-sha>",
+      "observedAt": "2026-09-28T20:00:00.000Z"
+    },
+    "policyRevision": "<sha256>",
+    "budget": { "maxCostUsd": 6 },
+    "additionalInstructions": "",
+    "idempotencyKey": "<sha256>",
+    "requestedAt": "2026-09-28T20:01:00.000Z",
+    "requestedBy": { "actorType": "service", "actorId": "hoss" }
+  },
+  "artifact": {
+    "title": "Implementation plan",
+    "content": "exact frozen artifact bytes as UTF-8 text"
+  },
+  "context": {
+    "text": "exact Context Capsule rendering used for this review",
+    "completeness": "complete"
+  },
+  "sources": []
+}
+~~~
+
+Model Prism recomputes the artifact and context SHA-256 values before dispatch. A mismatch is rejected.
+
+The HTTP Idempotency-Key must equal the request field. Model Prism binds that stable key to the existing durable submission ledger. An identical retry returns the existing run; reusing the key for changed review input is a conflict. This prevents ambiguous network failures from creating a second paid council.
+
+Read:
+
+~~~http
+GET /api/review-fabric/v1/reviews/:providerRunId
+Authorization: Bearer mp_svc_...
+~~~
+
+The read result is normalized for HOSS and includes run state, timestamps, cost, roster, synthesis model, disposition, finding counts, bounded material findings, synthesis Markdown/hash, context completeness, and the original HOSS request/artifact/basis references.
+
+The service endpoint exposes only runs created through the HOSS Review Fabric service path. A service token cannot use this route to read ordinary browser or OAuth-MCP reviews.
+
+Stop:
+
+~~~http
+POST /api/review-fabric/v1/reviews/:providerRunId/stop
+Authorization: Bearer mp_svc_...
+~~~
+
+Cancellation reuses the existing durable stop semantics. Completed responses and provider-accepted spending remain retained.
+
+### Credential boundary
+
+The HOSS token does not contain or reveal the OpenRouter credential.
+
+At dispatch:
+
+1. service token resolves to the owning Model Prism account;
+2. Model Prism loads that account's encrypted agent-access OpenRouter credential;
+3. Model Prism revalidates the provider credential;
+4. the existing background-review machinery receives its normal temporary encrypted job lease;
+5. HOSS sees only Model Prism review IDs and normalized results.
+
 ## Portfolio placement
 
 Model Prism remains a standalone **Review Fabric**. HOSS decides when an artifact is review-ready and can
