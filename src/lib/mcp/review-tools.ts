@@ -239,6 +239,7 @@ export async function getReviewResult(owner: string, input: unknown) {
   return {
     reviewId: run.id,
     createdAt: run.created_at,
+    updatedAt: snapshot?.updatedAt,
     totalCost: run.total_cost,
     state: snapshot?.background?.state ?? snapshot?.status ?? "complete",
     phase: snapshot?.background?.phase,
