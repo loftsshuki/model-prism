@@ -85,6 +85,16 @@ revalidates the credential and copies it into the existing 24-hour encrypted rev
 
 This is deliberately opt-in. Signing into Model Prism does not automatically persist a provider credential.
 
+## OAuth consent route
+
+The production Clerk instance cannot use its hosted Account Portal while Model Prism is served only from a `vercel.app` domain. Model Prism therefore hosts Clerk's prebuilt OAuth consent UI at:
+
+```text
+https://model-prism.vercel.app/oauth-consent
+```
+
+In Clerk Dashboard → **Configure → Paths**, set the production **OAuth consent** location to that full HTTPS URL. Keep the OAuth consent screen enabled for CIMD clients. The route uses Clerk's `<OAuthConsent />` component, preserves allow/deny behavior and requested-scope rendering, sets a strict referrer policy, and suppresses unrelated Model Prism navigation while consent is shown.
+
 ## One-time Clerk setting
 
 The production Clerk application must publish OAuth Client ID Metadata Document (CIMD) support so ChatGPT
