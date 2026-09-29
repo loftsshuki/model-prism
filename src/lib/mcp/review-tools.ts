@@ -159,7 +159,13 @@ async function liveProviderKey(owner: string) {
   return apiKey;
 }
 
-export async function submitReview(owner: string, input: unknown) {
+export interface SubmitReviewOptions {
+  submissionId?: string;
+  invokedBy?: string;
+  externalMetadata?: Record<string, unknown>;
+}
+
+export async function submitReview(owner: string, input: unknown, options: SubmitReviewOptions = {}) {
   const parsed = ReviewInputSchema.parse(input);
   const apiKey = await liveProviderKey(owner);
   const catalog = await fetchModelCatalog();
@@ -171,8 +177,9 @@ export async function submitReview(owner: string, input: unknown) {
     title: parsed.title,
     artifactType: parsed.artifactType,
     criticality: parsed.criticality,
-    invokedBy: "model-prism-mcp",
+    invokedBy: options.invokedBy ?? "model-prism-mcp",
     projectKey: parsed.projectKey,
+    ...(options.externalMetadata ? { external: options.externalMetadata } : {}),
   });
   const review = BackgroundReviewSchema.parse({
     id: reviewId,
@@ -194,7 +201,7 @@ export async function submitReview(owner: string, input: unknown) {
     projectKey: parsed.projectKey,
     sources: sourceDocuments(parsed.sources),
   });
-  const job = await startBackgroundReview(review, owner, apiKey, catalog, randomUUID());
+  const job = await startBackgroundReview(review, owner, apiKey, catalog, options.submissionId ?? randomUUID());
 
   if (job.started) {
     try { await start(backgroundReview, [job.id, job.execution]); }
