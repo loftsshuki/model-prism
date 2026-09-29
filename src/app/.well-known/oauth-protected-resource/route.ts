@@ -9,15 +9,19 @@ function headers() {
   };
 }
 
-export async function GET(req: NextRequest) {
+function metadata(req: NextRequest) {
   const origin = req.nextUrl.origin;
-  return NextResponse.json({
+  return {
     resource: `${origin}/api/mcp`,
     authorization_servers: [`${origin}/__clerk`],
     scopes_supported: ["openid", "profile", "email", "offline_access"],
     bearer_methods_supported: ["header"],
     resource_name: "Model Prism MCP",
-  }, { headers: headers() });
+  };
+}
+
+export async function GET(req: NextRequest) {
+  return NextResponse.json(metadata(req), { headers: headers() });
 }
 
 export async function OPTIONS() {

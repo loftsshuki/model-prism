@@ -13,7 +13,7 @@ const clerk = clerkMiddleware({
 });
 
 export default function proxy(req: NextRequest, event: NextFetchEvent) {
-  if (req.nextUrl.pathname.startsWith("/.well-known/workflow/") || req.nextUrl.pathname.startsWith("/.well-known/oauth-protected-resource/") || req.nextUrl.pathname.startsWith("/api/cron/")) return NextResponse.next();
+  if (req.nextUrl.pathname.startsWith("/.well-known/workflow/") || req.nextUrl.pathname.startsWith("/.well-known/oauth-protected-resource") || req.nextUrl.pathname.startsWith("/api/cron/")) return NextResponse.next();
   if (!process.env.CLERK_SECRET_KEY || !process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) return NextResponse.next();
   return clerk(req, event);
 }

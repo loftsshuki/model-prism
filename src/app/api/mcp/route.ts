@@ -38,7 +38,7 @@ function authChallenge(req: NextRequest, id: RpcId = null) {
     status: 401,
     headers: {
       "Cache-Control": "no-store",
-      "WWW-Authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp", scope="openid profile email offline_access"`,
+      "WWW-Authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource", scope="openid profile email offline_access"`,
       "MCP-Protocol-Version": PROTOCOL_VERSION,
     },
   });
@@ -86,6 +86,9 @@ export async function POST(req: NextRequest) {
     ? body.params as Record<string, unknown>
     : {};
 
+  const auth = await accountOwner(req, id);
+  if (auth.response) return auth.response;
+
   if (method === "initialize") {
     const requested = typeof params.protocolVersion === "string" ? params.protocolVersion : PROTOCOL_VERSION;
     const protocolVersion = requested === PROTOCOL_VERSION ? requested : PROTOCOL_VERSION;
@@ -102,9 +105,6 @@ export async function POST(req: NextRequest) {
   }
 
   if (method === "ping") return jsonRpc(id, {});
-
-  const auth = await accountOwner(req, id);
-  if (auth.response) return auth.response;
 
   if (method === "tools/list") {
     const securitySchemes = [{ type: "oauth2", scopes: ["openid", "profile", "email", "offline_access"] }];
@@ -133,15 +133,16 @@ export async function POST(req: NextRequest) {
   return rpcError(id, -32601, `Method not found: ${method || "(missing)"}`);
 }
 
-export async function GET() {
-  return NextResponse.json({
-    name: "Model Prism MCP",
-    transport: "streamable-http",
-    protocolVersion: PROTOCOL_VERSION,
-    endpoint: "/api/mcp",
-  }, {
+export async function GET(req: NextRequest) {
+  const auth = await accountOwner(req, null);
+  if (auth.response) return auth.response;
+  return new NextResponse(null, {
     status: 405,
-    headers: { "Allow": "POST, OPTIONS", "Cache-Control": "no-store" },
+    headers: {
+      "Allow": "POST, OPTIONS",
+      "Cache-Control": "no-store",
+      "MCP-Protocol-Version": PROTOCOL_VERSION,
+    },
   });
 }
 
@@ -150,7 +151,7 @@ export async function OPTIONS() {
     status: 204,
     headers: {
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
       "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept, MCP-Protocol-Version",
       "Access-Control-Max-Age": "86400",
     },
