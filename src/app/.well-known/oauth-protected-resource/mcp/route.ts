@@ -15,7 +15,8 @@ export async function GET(req: NextRequest) {
     resource: `${origin}/api/mcp`,
     authorization_servers: [`${origin}/__clerk`],
     scopes_supported: ["openid", "profile", "email", "offline_access"],
-    resource_documentation: `${origin}/docs/mcp`,
+    bearer_methods_supported: ["header"],
+    resource_name: "Model Prism MCP",
   }, { headers: headers() });
 }
 
