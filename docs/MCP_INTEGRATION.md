@@ -3,6 +3,16 @@
 Model Prism exposes its durable council review engine as an authenticated remote MCP server for ChatGPT,
 Codex, HOSS and other MCP-compatible clients.
 
+## ChatGPT OAuth discovery compatibility
+
+The MCP transport is authentication-required from the first GET/POST request. Unauthenticated probes receive `401 Unauthorized` with a `WWW-Authenticate` challenge pointing at the root RFC 9728 protected-resource metadata URL:
+
+```text
+https://model-prism.vercel.app/.well-known/oauth-protected-resource
+```
+
+Model Prism also retains the path-specific metadata alias at `/.well-known/oauth-protected-resource/mcp`. Both documents identify the Clerk issuer at `https://model-prism.vercel.app/__clerk`, advertise the required scopes, and declare header-based bearer tokens. This matches ChatGPT's current OAuth discovery flow while preserving the path-aware MCP metadata form.
+
 ## Endpoint
 
 ```text
