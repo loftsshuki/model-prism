@@ -1,9 +1,9 @@
 {
-  "checkedAt": "2026-09-19T19:31:12.953Z",
+  "checkedAt": "2026-09-30T21:22:05.226Z",
   "models": [
     {
-      "id": "openai/gpt-5.6-sol",
-      "name": "GPT-5.6 Sol",
+      "id": "openai/gpt-6.1-sol",
+      "name": "GPT-6.1 Sol",
       "family": "openai",
       "tier": "strong",
       "contextLength": 1050000,
@@ -23,20 +23,19 @@
         "tools"
       ],
       "reasoning": {
-        "mandatory": false,
+        "mandatory": true,
         "default_enabled": true,
         "supported_efforts": [
           "max",
           "xhigh",
           "high",
           "medium",
-          "low",
-          "none"
+          "low"
         ],
         "default_effort": "medium"
       },
-      "created": 1783590850,
-      "verifiedAt": "2026-09-19T19:31:12.953Z",
+      "created": 1790702882,
+      "verifiedAt": "2026-09-30T21:22:05.226Z",
       "toolCallApi": "chat"
     },
     {
@@ -73,7 +72,7 @@
         "default_effort": "medium"
       },
       "created": 1788362056,
-      "verifiedAt": "2026-09-19T19:31:12.953Z",
+      "verifiedAt": "2026-09-30T21:22:05.226Z",
       "toolCallApi": "chat"
     },
     {
@@ -82,9 +81,9 @@
       "family": "deepseek",
       "tier": "fast",
       "contextLength": 1048576,
-      "inputCostPer1k": 0.00015,
-      "outputCostPer1k": 0.0006,
-      "maxOutputTokens": 384000,
+      "inputCostPer1k": 0.0000198,
+      "outputCostPer1k": 0.000396,
+      "maxOutputTokens": 943718,
       "supportedParameters": [
         "frequency_penalty",
         "include_reasoning",
@@ -118,7 +117,7 @@
         "default_effort": "high"
       },
       "created": 1789021285,
-      "verifiedAt": "2026-09-19T19:31:12.953Z",
+      "verifiedAt": "2026-09-30T21:22:05.226Z",
       "toolCallApi": "chat"
     },
     {
@@ -155,38 +154,28 @@
         "mandatory": false
       },
       "created": 1780245374,
-      "verifiedAt": "2026-09-19T19:31:12.953Z",
+      "verifiedAt": "2026-09-30T21:22:05.226Z",
       "toolCallApi": "chat"
     },
     {
-      "id": "z-ai/glm-5.3-flash",
-      "name": "GLM 5.3 Flash",
+      "id": "z-ai/glm-5.3-flashx",
+      "name": "GLM 5.3 FlashX",
       "family": "glm",
       "tier": "fast",
-      "contextLength": 1310720,
-      "inputCostPer1k": 0.00008999999999999999,
-      "outputCostPer1k": 0.0003,
+      "contextLength": 1048576,
+      "inputCostPer1k": 0.00037,
+      "outputCostPer1k": 0.00125,
       "maxOutputTokens": 131072,
       "supportedParameters": [
-        "frequency_penalty",
         "include_reasoning",
-        "logit_bias",
-        "logprobs",
         "max_tokens",
-        "min_p",
-        "presence_penalty",
         "reasoning",
         "reasoning_effort",
-        "repetition_penalty",
         "response_format",
-        "seed",
-        "stop",
-        "structured_outputs",
         "temperature",
         "tool_choice",
         "tools",
         "top_k",
-        "top_logprobs",
         "top_p"
       ],
       "reasoning": {
@@ -199,8 +188,8 @@
         ],
         "default_effort": "max"
       },
-      "created": 1787752741,
-      "verifiedAt": "2026-09-19T19:31:12.953Z",
+      "created": 1789744020,
+      "verifiedAt": "2026-09-30T21:22:05.226Z",
       "toolCallApi": "chat"
     },
     {
@@ -222,7 +211,8 @@
         "seed",
         "structured_outputs",
         "tool_choice",
-        "tools"
+        "tools",
+        "verbosity"
       ],
       "reasoning": {
         "mandatory": true,
@@ -237,12 +227,12 @@
         "default_effort": "medium"
       },
       "created": 1788552838,
-      "verifiedAt": "2026-09-19T19:31:12.953Z",
+      "verifiedAt": "2026-09-30T21:22:05.226Z",
       "toolCallApi": "responses"
     },
     {
-      "id": "x-ai/grok-4.6",
-      "name": "Grok 4.6",
+      "id": "x-ai/grok-4.7",
+      "name": "Grok 4.7",
       "family": "grok",
       "tier": "frontier",
       "contextLength": 500000,
@@ -257,12 +247,10 @@
         "reasoning_effort",
         "response_format",
         "seed",
-        "stop",
         "structured_outputs",
         "temperature",
         "tool_choice",
         "tools",
-        "top_k",
         "top_logprobs",
         "top_p"
       ],
@@ -277,18 +265,18 @@
         ],
         "default_effort": "high"
       },
-      "created": 1786548957,
-      "verifiedAt": "2026-09-19T19:31:12.953Z",
+      "created": 1790007541,
+      "verifiedAt": "2026-09-30T21:22:05.226Z",
       "toolCallApi": "chat"
     },
     {
-      "id": "qwen/qwen3.8-max-0902",
-      "name": "Qwen3.8 Max (0902)",
+      "id": "qwen/qwen3.8-max-prime",
+      "name": "Qwen3.8 Max Prime",
       "family": "qwen",
       "tier": "frontier",
       "contextLength": 1000000,
-      "inputCostPer1k": 0.002,
-      "outputCostPer1k": 0.006,
+      "inputCostPer1k": 0.004,
+      "outputCostPer1k": 0.012,
       "maxOutputTokens": 131072,
       "supportedParameters": [
         "frequency_penalty",
@@ -321,63 +309,56 @@
         ],
         "default_effort": "xhigh"
       },
-      "created": 1788469704,
-      "verifiedAt": "2026-09-19T19:31:12.953Z",
+      "created": 1790191228,
+      "verifiedAt": "2026-09-30T21:22:05.226Z",
       "toolCallApi": "chat"
     },
     {
-      "id": "moonshotai/kimi-k3",
-      "name": "Kimi K3",
-      "family": "kimi",
+      "id": "anthropic/claude-opus-5.5",
+      "name": "Claude Opus 5.5",
+      "family": "claude",
       "tier": "frontier",
-      "contextLength": 1048576,
-      "inputCostPer1k": 0.0017000000000000001,
-      "outputCostPer1k": 0.0085,
-      "maxOutputTokens": 943718,
+      "contextLength": 1000000,
+      "inputCostPer1k": 0.004,
+      "outputCostPer1k": 0.02,
+      "maxOutputTokens": 128000,
       "supportedParameters": [
-        "frequency_penalty",
         "include_reasoning",
-        "logit_bias",
-        "logprobs",
+        "max_completion_tokens",
         "max_tokens",
-        "min_p",
-        "presence_penalty",
         "reasoning",
         "reasoning_effort",
-        "repetition_penalty",
         "response_format",
-        "seed",
         "stop",
         "structured_outputs",
         "temperature",
         "tool_choice",
         "tools",
-        "top_k",
-        "top_logprobs",
-        "top_p"
+        "verbosity"
       ],
       "reasoning": {
-        "mandatory": false,
-        "default_enabled": true,
+        "mandatory": true,
         "supported_efforts": [
           "max",
+          "xhigh",
           "high",
+          "medium",
           "low"
         ],
-        "default_effort": "max"
+        "default_effort": "high"
       },
-      "created": 1784215858,
-      "verifiedAt": "2026-09-19T19:31:12.953Z",
+      "created": 1790094732,
+      "verifiedAt": "2026-09-30T21:22:05.226Z",
       "toolCallApi": "chat"
     },
     {
-      "id": "openai/gpt-5.6-luna",
-      "name": "GPT-5.6 Luna",
+      "id": "openai/gpt-6-luna",
+      "name": "GPT-6 Luna",
       "family": "openai",
       "tier": "fast",
       "contextLength": 1050000,
-      "inputCostPer1k": 0.00019999999999999998,
-      "outputCostPer1k": 0.0012,
+      "inputCostPer1k": 0.00009999999999999999,
+      "outputCostPer1k": 0.0005,
       "maxOutputTokens": 128000,
       "supportedParameters": [
         "include_reasoning",
@@ -389,7 +370,8 @@
         "seed",
         "structured_outputs",
         "tool_choice",
-        "tools"
+        "tools",
+        "verbosity"
       ],
       "reasoning": {
         "mandatory": false,
@@ -404,8 +386,8 @@
         ],
         "default_effort": "medium"
       },
-      "created": 1783590864,
-      "verifiedAt": "2026-09-19T19:31:12.953Z",
+      "created": 1790100786,
+      "verifiedAt": "2026-09-30T21:22:05.226Z",
       "toolCallApi": "chat"
     },
     {
@@ -443,7 +425,7 @@
         "default_effort": "minimal"
       },
       "created": 1784646726,
-      "verifiedAt": "2026-09-19T19:31:12.953Z",
+      "verifiedAt": "2026-09-30T21:22:05.226Z",
       "toolCallApi": "chat"
     },
     {
@@ -469,55 +451,17 @@
         "mandatory": false
       },
       "created": 1786452751,
-      "verifiedAt": "2026-09-19T19:31:12.953Z",
+      "verifiedAt": "2026-09-30T21:22:05.226Z",
       "toolCallApi": "chat"
     },
     {
-      "id": "anthropic/claude-sonnet-5",
-      "name": "Claude Sonnet 5",
+      "id": "anthropic/claude-sonnet-5.5",
+      "name": "Claude Sonnet 5.5",
       "family": "claude",
       "tier": "frontier",
       "contextLength": 1000000,
       "inputCostPer1k": 0.002,
       "outputCostPer1k": 0.01,
-      "maxOutputTokens": 128000,
-      "supportedParameters": [
-        "include_reasoning",
-        "max_completion_tokens",
-        "max_tokens",
-        "reasoning",
-        "reasoning_effort",
-        "response_format",
-        "stop",
-        "structured_outputs",
-        "tool_choice",
-        "tools",
-        "verbosity"
-      ],
-      "reasoning": {
-        "mandatory": false,
-        "default_enabled": true,
-        "supported_efforts": [
-          "max",
-          "xhigh",
-          "high",
-          "medium",
-          "low"
-        ],
-        "default_effort": "high"
-      },
-      "created": 1782843083,
-      "verifiedAt": "2026-09-19T19:31:12.953Z",
-      "toolCallApi": "chat"
-    },
-    {
-      "id": "anthropic/claude-opus-5",
-      "name": "Claude Opus 5",
-      "family": "claude",
-      "tier": "frontier",
-      "contextLength": 1000000,
-      "inputCostPer1k": 0.005,
-      "outputCostPer1k": 0.025,
       "maxOutputTokens": 128000,
       "supportedParameters": [
         "include_reasoning",
@@ -534,8 +478,7 @@
         "verbosity"
       ],
       "reasoning": {
-        "mandatory": false,
-        "default_enabled": true,
+        "mandatory": true,
         "supported_efforts": [
           "max",
           "xhigh",
@@ -545,8 +488,8 @@
         ],
         "default_effort": "high"
       },
-      "created": 1784912544,
-      "verifiedAt": "2026-09-19T19:31:12.953Z",
+      "created": 1790618686,
+      "verifiedAt": "2026-09-30T21:22:05.226Z",
       "toolCallApi": "chat"
     },
     {
@@ -567,6 +510,7 @@
         "response_format",
         "stop",
         "structured_outputs",
+        "tool_choice",
         "tools",
         "verbosity"
       ],
@@ -582,7 +526,7 @@
         "default_effort": "high"
       },
       "created": 1788285838,
-      "verifiedAt": "2026-09-19T19:31:12.953Z",
+      "verifiedAt": "2026-09-30T21:22:05.226Z",
       "toolCallApi": "chat"
     },
     {
@@ -591,9 +535,9 @@
       "family": "nemotron",
       "tier": "strong",
       "contextLength": 262144,
-      "inputCostPer1k": 0.00007000000000000001,
-      "outputCostPer1k": 0.00019999999999999998,
-      "maxOutputTokens": 235929,
+      "inputCostPer1k": 0.000059999999999999995,
+      "outputCostPer1k": 0.00016,
+      "maxOutputTokens": 32768,
       "supportedParameters": [
         "frequency_penalty",
         "include_reasoning",
@@ -619,7 +563,7 @@
         "mandatory": false
       },
       "created": 1786452751,
-      "verifiedAt": "2026-09-19T19:31:12.953Z",
+      "verifiedAt": "2026-09-30T21:22:05.226Z",
       "toolCallApi": "chat"
     }
   ]

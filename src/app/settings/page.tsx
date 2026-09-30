@@ -10,6 +10,8 @@ import { BUILT_IN_PROJECT_PROFILES, createProjectProfile, getCustomProjectProfil
 import { validatePat } from "@/lib/github";
 import { getCacheSize, getCacheEntryCount, clearAllCache } from "@/lib/context-cache";
 import { PatValidationResult } from "@/lib/types";
+import { SNAPSHOT_MODELS, SYNTHESIS_IDS, type SynthesisModelKey } from "@/lib/model-catalog";
+import { getSynthesisPreference } from "@/lib/synthesis-preference";
 
 function getStoredKey(key: string): string {
   if (typeof window === "undefined") return "";
@@ -28,7 +30,7 @@ function getCustomTemplates(): PromptTemplate[] {
 export default function SettingsPage() {
   const [openrouterKey, setOpenrouterKey] = useState("");
   const [adminToken, setAdminToken] = useState("");
-  const [synthesisModel, setSynthesisModel] = useState("sonnet");
+  const [synthesisModel, setSynthesisModel] = useState<SynthesisModelKey>("fable");
   const [customTemplates, setCustomTemplates] = useState<PromptTemplate[]>([]);
   const [newName, setNewName] = useState("");
   const [newPrompt, setNewPrompt] = useState("");
@@ -37,7 +39,7 @@ export default function SettingsPage() {
   const [profileDescription, setProfileDescription] = useState("");
   const [profileRunPreset, setProfileRunPreset] = useState(DEFAULT_RUN_PRESETS[0].id);
   const [profileModelPreset, setProfileModelPreset] = useState<ModelSelectionPreset>("diverse");
-  const [profileSynthesisModel, setProfileSynthesisModel] = useState<"sonnet" | "opus">("opus");
+  const [profileSynthesisModel, setProfileSynthesisModel] = useState<SynthesisModelKey>("fable");
   const [profileMaxCost, setProfileMaxCost] = useState(1.5);
   const [profileContextName, setProfileContextName] = useState("");
   const [saved, setSaved] = useState(false);
@@ -58,7 +60,7 @@ export default function SettingsPage() {
     setRememberKeys(Boolean(localStorage.getItem("openrouter-api-key")));
     setOpenrouterKey(getStoredKey("openrouter-api-key"));
     setAdminToken(getStoredKey("model-prism-admin-token"));
-    setSynthesisModel(getStoredKey("synthesis-model") || "sonnet");
+    setSynthesisModel(getSynthesisPreference());
     setGithubPat(getStoredKey("github-pat"));
     setCustomTemplates(getCustomTemplates());
     setCustomProfiles(getCustomProjectProfiles());
@@ -197,26 +199,19 @@ export default function SettingsPage() {
             <div>
               <label className="block text-xs text-grey-50 mb-1">Default Synthesis Model</label>
               <div className="flex gap-2">
-                <button
-                  onClick={() => setSynthesisModel("sonnet")}
-                  className={`text-xs px-4 py-2 rounded-lg border transition-colors ${
-                    synthesisModel === "sonnet"
-                      ? "border-green bg-green-light text-green"
-                      : "border-border bg-white text-grey-50 hover:border-border"
-                  }`}
-                >
-                  Sonnet 5
-                </button>
-                <button
-                  onClick={() => setSynthesisModel("opus")}
-                  className={`text-xs px-4 py-2 rounded-lg border transition-colors ${
-                    synthesisModel === "opus"
-                      ? "border-green bg-green-light text-green"
-                      : "border-border bg-white text-grey-50 hover:border-border"
-                  }`}
-                >
-                  Opus 5
-                </button>
+                {Object.entries(SYNTHESIS_IDS).map(([key, id]) => (
+                  <button
+                    key={key}
+                    onClick={() => setSynthesisModel(key as SynthesisModelKey)}
+                    className={`text-xs px-4 py-2 rounded-lg border transition-colors ${
+                      synthesisModel === key
+                        ? "border-green bg-green-light text-green"
+                        : "border-border bg-white text-grey-50 hover:border-border"
+                    }`}
+                  >
+                    {SNAPSHOT_MODELS.find((model) => model.id === id)?.name ?? id}
+                  </button>
+                ))}
               </div>
             </div>
           </div>
@@ -354,9 +349,10 @@ export default function SettingsPage() {
                 <option value="all">All</option>
                 <option value="free">Free</option>
               </select>
-              <select value={profileSynthesisModel} onChange={(e) => setProfileSynthesisModel(e.target.value as "sonnet" | "opus")} className="bg-white border border-border rounded px-3 py-2 text-sm text-ink focus:outline-none focus:border-green">
-                <option value="sonnet">Sonnet synthesis</option>
-                <option value="opus">Opus synthesis</option>
+              <select value={profileSynthesisModel} onChange={(e) => setProfileSynthesisModel(e.target.value as SynthesisModelKey)} className="bg-white border border-border rounded px-3 py-2 text-sm text-ink focus:outline-none focus:border-green">
+                <option value="fable">Fable 5.1 synthesis</option>
+                <option value="sonnet">Sonnet 5.5 synthesis</option>
+                <option value="opus">Opus 5.5 synthesis</option>
               </select>
               <input
                 type="number"

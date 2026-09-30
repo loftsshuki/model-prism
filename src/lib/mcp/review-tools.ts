@@ -93,16 +93,12 @@ function chooseModels(catalog: ModelInfo[], criticality: Criticality) {
   return ids;
 }
 
-function chooseSynthesis(catalog: ModelInfo[], criticality: Criticality) {
-  const preferred = criticality === "low"
-    ? [SYNTHESIS_IDS.sonnet, SYNTHESIS_IDS.opus, SYNTHESIS_IDS.fable]
-    : [SYNTHESIS_IDS.opus, SYNTHESIS_IDS.sonnet, SYNTHESIS_IDS.fable];
-  const model = preferred.find(id => {
-    const found = catalog.find(item => item.id === id);
-    return found && found.toolCallApi !== "responses" && found.supportedParameters?.includes("tools");
-  });
-  if (!model) throw new Error("No tool-capable Model Prism synthesis model is currently available");
-  return model;
+function chooseSynthesis(catalog: ModelInfo[]) {
+  const model = catalog.find(item => item.id === SYNTHESIS_IDS.fable);
+  if (!model || model.toolCallApi === "responses" || !model.supportedParameters?.includes("tools")) {
+    throw new Error("Claude Fable 5.1 is unavailable for Model Prism synthesis");
+  }
+  return model.id;
 }
 
 function budgetFor(criticality: Criticality) {
@@ -170,7 +166,7 @@ export async function submitReview(owner: string, input: unknown, options: Submi
   const apiKey = await liveProviderKey(owner);
   const catalog = await fetchModelCatalog();
   const modelIds = chooseModels(catalog, parsed.criticality);
-  const synthesisModel = chooseSynthesis(catalog, parsed.criticality);
+  const synthesisModel = chooseSynthesis(catalog);
   const reviewId = `run_${randomUUID()}`;
   const maxCost = parsed.maxCost ?? budgetFor(parsed.criticality);
   const metadata = JSON.stringify({

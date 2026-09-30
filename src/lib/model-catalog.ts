@@ -3,14 +3,14 @@ import type { ModelInfo } from "./types";
 
 /** One list of reviewed model IDs, shared by the app, CLI and freshness checks. */
 export const COUNCIL_IDS = {
-  balanced: ["openai/gpt-5.6-sol", "google/gemini-3.8-flash", "deepseek/deepseek-v4.1-flash", "minimax/minimax-m3", "z-ai/glm-5.3-flash"],
-  frontier: ["openai/gpt-6-astra", "google/gemini-3.8-flash", "x-ai/grok-4.6", "qwen/qwen3.8-max-0902", "moonshotai/kimi-k3"],
-  cheap: ["openai/gpt-5.6-luna", "google/gemini-3.5-flash-lite", "deepseek/deepseek-v4.1-flash", "minimax/minimax-m3", "z-ai/glm-5.3-flash"],
+  balanced: ["openai/gpt-6.1-sol", "google/gemini-3.8-flash", "deepseek/deepseek-v4.1-flash", "minimax/minimax-m3", "z-ai/glm-5.3-flashx"],
+  frontier: ["openai/gpt-6-astra", "google/gemini-3.8-flash", "x-ai/grok-4.7", "qwen/qwen3.8-max-prime", "anthropic/claude-opus-5.5"],
+  cheap: ["openai/gpt-6-luna", "google/gemini-3.5-flash-lite", "deepseek/deepseek-v4.1-flash", "minimax/minimax-m3", "z-ai/glm-5.3-flashx"],
   free: ["nvidia/nemotron-3.5-lightning:free"],
 } as const;
 export const SYNTHESIS_IDS = {
-  sonnet: "anthropic/claude-sonnet-5",
-  opus: "anthropic/claude-opus-5",
+  sonnet: "anthropic/claude-sonnet-5.5",
+  opus: "anthropic/claude-opus-5.5",
   fable: "anthropic/claude-fable-5.1",
 } as const;
 export type SynthesisModelKey = keyof typeof SYNTHESIS_IDS;

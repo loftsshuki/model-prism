@@ -6,7 +6,7 @@ import type { ModelUsage } from "./types";
 //
 // This module implements the `fusion` prism-mode merge. It is ADDITIVE and
 // entirely separate from legacy `synthesis.ts`: nothing here is reachable unless
-// review-plan.ts is invoked with `--prism-mode fusion`. Legacy (single-Opus
+// review-plan.ts is invoked with `--prism-mode fusion`. Legacy (single-Fable
 // merge, src/lib/synthesis.ts) is the permanent fallback + A/B baseline and is
 // never touched by this file.
 //
@@ -44,9 +44,8 @@ export function coerceStrategicCategory(raw: string): string {
   return "other";
 }
 
-// The judge runs analysis-only. Default to the same strong model as the
-// synthesizer (Opus 4.8 via OpenRouter) — judge quality is where the lift lives,
-// so we do not cheap out on it. Overridable per call.
+// The judge runs analysis-only with Fable 5.1, which also writes the synthesis.
+// Both choices are overridable per call.
 export const JUDGE_MODEL_ID = OPENROUTER_SYNTHESIS_MODEL_ID;
 export const SYNTHESIZER_MODEL_ID = OPENROUTER_SYNTHESIS_MODEL_ID;
 

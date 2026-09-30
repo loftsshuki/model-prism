@@ -4,7 +4,7 @@ import { RunBudget } from "../src/lib/run-budget";
 import { mergeUsage } from "../src/lib/run-checkpoint";
 import type { ModelUsage } from "../src/lib/types";
 /**
- * Model Prism CLI — review plans with five diverse models + Opus synthesis.
+ * Model Prism CLI — review plans with five diverse models + Fable synthesis.
  *
  * Usage:
  *   npx tsx scripts/review-plan.ts <path-to-plan-or-folder> [options]
@@ -18,7 +18,7 @@ import type { ModelUsage } from "../src/lib/types";
  *
  * Environment:
  *   OPENROUTER_API_KEY   Required — bills the ENTIRE pipeline (council fan-out,
- *                        brief enhancement via Sonnet, and Opus synthesis). The
+ *                        brief enhancement via Sonnet, and Fable synthesis). The
  *                        Anthropic API is never called directly.
  */
 import * as fs from "fs";
@@ -27,7 +27,7 @@ import * as crypto from "crypto";
 import { fanOut } from "../src/lib/fan-out";
 import { synthesizeViaOpenRouter, OPENROUTER_SYNTHESIS_MODEL_ID } from "../src/lib/synthesis";
 // Fusion path (judge→synthesizer). Only reachable under --prism-mode fusion; legacy
-// (single-Opus merge) is untouched and remains the default + permanent fallback.
+// (single-Fable merge) is untouched and remains the default + permanent fallback.
 import {
   judgeViaOpenRouter, synthesizeFromJudge, JudgeError,
   dropUnresolvedCitations, tightenProse, renderDualLensSections,
@@ -87,7 +87,7 @@ interface Args {
   enhance: boolean;
   // Second-pass / custom-review support:
   reviewPromptPath: string | null;    // override fan-out REVIEW_PROMPT
-  synthesisPromptPath: string | null; // override Opus synthesis trailing instructions
+  synthesisPromptPath: string | null; // override Fable synthesis trailing instructions
   outputPath: string | null;          // explicit output path; bypasses getReviewPath()
   excludeModels: string[];            // repeatable: model IDs to drop from council
   roster: string | null;              // roster preset name ('default'|'frontier'|'cheap'|'auto')
@@ -102,7 +102,7 @@ interface Args {
 function parseArgs(): Args {
   const argv = process.argv.slice(2);
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
-    console.log(`Model Prism CLI — Review plans with five diverse models + Opus synthesis
+    console.log(`Model Prism CLI — Review plans with five diverse models + Fable synthesis
 
 Usage:
   npx tsx scripts/review-plan.ts <plan-file-or-folder> [options]
@@ -118,7 +118,7 @@ Options:
   --review-prompt <path>     Use a custom prompt for the 10-model fan-out instead of
                              the built-in plan-review prompt (also re-labels output
                              as a "Second-Pass Review" rather than "Plan Review")
-  --synthesis-prompt <path>  Use a custom trailing instruction for the Opus synthesis
+  --synthesis-prompt <path>  Use a custom trailing instruction for the Fable synthesis
                              step instead of the built-in masterDocument framework
   --output-path <path>       Write the review to this exact path instead of the
                              auto-derived <dir>/reviews/<name>.review.md
@@ -135,11 +135,11 @@ Options:
                                         frontmatter field overrides the size heuristic.)
   --auto-threshold-tokens N  Size cutoff for --roster auto (default: ${AUTO_THRESHOLD_TOKENS}).
                              Plans estimated at ≥ N tokens get the frontier council.
-  --prism-mode <mode>        legacy (default) | fusion. legacy = single-Opus merge,
+  --prism-mode <mode>        legacy (default) | fusion. legacy = single-Fable merge,
                              fires every run (A/B baseline + permanent fallback).
                              fusion = judge→synthesizer split + risk scoring.
   --no-two-stage             In fusion mode, skip the judge→synthesizer split and
-                             use the legacy single-Opus merge (sub-flag, B14).
+                             use the legacy single-Fable merge (sub-flag, B14).
   --no-risk-gate             In fusion mode, skip structured risk scoring.
   --agentic                  In fusion mode, allow repo-grep/web council members on
                              HIGH-risk plans (default OFF; requires two-stage). B14
@@ -783,7 +783,7 @@ async function reviewPlan(
     }
   }
 
-  // ── Merge stage: legacy single-Opus OR fusion judge→synthesizer ─────────────
+  // ── Merge stage: legacy single-Fable OR fusion judge→synthesizer ────────────
   // Fusion runs ONLY under --prism-mode fusion with two-stage enabled. ANY fusion
   // failure soft-falls-back to the legacy merge (tagged prism-fallback so it's
   // visible) — it never blocks the plan from landing (Rollback: degraded-mode).
@@ -811,7 +811,7 @@ async function reviewPlan(
       // SOFT FALLBACK (context-gate T2 posture): run the legacy merge, tag it
       // visibly so chronic fusion breakage isn't silent, never block the plan.
       prismFallback = "legacy";
-      console.error(`  [fusion] ALERT judge/synthesizer failed (${detail}) — falling back to legacy single-Opus merge (prism-fallback: legacy)`);
+      console.error(`  [fusion] ALERT judge/synthesizer failed (${detail}) — falling back to legacy single-Fable merge (prism-fallback: legacy)`);
       synthesis = await synthesizeViaOpenRouter({
         openrouterKey, content: planContent, analysisPrompt: effectiveReviewPrompt,
         responses: synthesisResponses, context: contextString, customSynthesisInstructions: synthesisPromptOverride, budget, signal, onUsage,
@@ -968,7 +968,7 @@ async function main(): Promise<number> {
     // The ENTIRE pipeline — council fan-out, brief enhancement, AND synthesis —
     // now bills to OPENROUTER_API_KEY. The Anthropic API is never called directly,
     // so ANTHROPIC_API_KEY is no longer required for any step. (Enhancement uses
-    // anthropic/claude-sonnet-5 *via OpenRouter*; synthesis uses Opus via OpenRouter.)
+    // Claude Sonnet *via OpenRouter*; synthesis uses Fable via OpenRouter.)
   }
 
   const controller = new AbortController();
