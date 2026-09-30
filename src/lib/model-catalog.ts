@@ -24,8 +24,8 @@ export const SNAPSHOT_CHECKED_AT = snapshot.checkedAt;
 export const SNAPSHOT_MODELS = snapshot.models as ModelInfo[];
 let runtimeCatalog = SNAPSHOT_MODELS;
 export function setRuntimeCatalog(models: ModelInfo[]) { runtimeCatalog = models; }
-export const COUNCIL_MAX_TOKENS = 8192;
-export const SYNTHESIS_MAX_TOKENS = 16384;
+export const COUNCIL_MAX_TOKENS = 24576;
+export const SYNTHESIS_MAX_TOKENS = 32768;
 
 export interface CatalogEntry {
   id: string;
