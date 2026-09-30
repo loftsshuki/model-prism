@@ -57,19 +57,18 @@ export default function SettingsPage() {
 
   useEffect(() => {
     queueMicrotask(() => {
-    setRememberKeys(Boolean(localStorage.getItem("openrouter-api-key")));
-    setOpenrouterKey(getStoredKey("openrouter-api-key"));
-    setAdminToken(getStoredKey("model-prism-admin-token"));
-    setSynthesisModel(getSynthesisPreference());
-    setGithubPat(getStoredKey("github-pat"));
-    setCustomTemplates(getCustomTemplates());
-    setCustomProfiles(getCustomProjectProfiles());
+      setRememberKeys(Boolean(localStorage.getItem("openrouter-api-key")));
+      setOpenrouterKey(getStoredKey("openrouter-api-key"));
+      setAdminToken(getStoredKey("model-prism-admin-token"));
+      setSynthesisModel(getSynthesisPreference());
+      setGithubPat(getStoredKey("github-pat"));
+      setCustomTemplates(getCustomTemplates());
+      setCustomProfiles(getCustomProjectProfiles());
 
-    // Load cache stats
-    (async () => {
-      setCacheSize(await getCacheSize());
-      setCacheEntries(await getCacheEntryCount());
-    })();
+      // Cache statistics are optional, but a read failure must be handled.
+      void Promise.all([getCacheSize(), getCacheEntryCount()])
+        .then(([size, entries]) => { setCacheSize(size); setCacheEntries(entries); })
+        .catch((error) => console.error("Could not read cache statistics", error));
     });
   }, []);
 
