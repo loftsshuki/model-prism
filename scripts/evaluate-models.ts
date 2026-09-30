@@ -25,7 +25,7 @@ async function council(fixture: EvaluationFixture, models: ModelInfo[], catalog:
   const synthesize = async (answers: ModelResponse[]) => {
     const successful = answers.filter(answer => answer.status === "complete" && answer.response);
     if (successful.length < 2) throw new Error("Too few completed reviewers for synthesis");
-    const model = catalog.find(model => model.id === SYNTHESIS_IDS.sonnet);
+    const model = catalog.find(model => model.id === SYNTHESIS_IDS.fable);
     if (!model) throw new Error("Configured synthesis model is unavailable");
     return synthesizeViaOpenRouter({ openrouterKey: apiKey, budget, modelId: model.id, model, content, sources,
       analysisPrompt: `${prompt}\nIn the final synthesis, prefix every finding title with [${fixture.rule}] and cite the exact file source ID. Findings outside the contract are out of scope.`,

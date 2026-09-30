@@ -138,12 +138,13 @@ export const SynthesisJsonSchema = {
 };
 
 // Direct API aliases retained for compatibility; app and CLI use OpenRouter.
-export const SYNTHESIS_MODEL_IDS: Record<"sonnet" | "opus", string> = {
+export const SYNTHESIS_MODEL_IDS: Record<"sonnet" | "opus" | "fable", string> = {
   opus: SYNTHESIS_IDS.opus.replace("anthropic/", ""),
   sonnet: SYNTHESIS_IDS.sonnet.replace("anthropic/", ""),
+  fable: SYNTHESIS_IDS.fable.replace("anthropic/", ""),
 };
 
-export const OPENROUTER_SYNTHESIS_MODEL_ID = SYNTHESIS_IDS.opus;
+export const OPENROUTER_SYNTHESIS_MODEL_ID = SYNTHESIS_IDS.fable;
 
 // An Error tagged as non-retryable — a retry would only reproduce the same failure
 // (malformed request, bad key, exhausted credits), so the loop fails fast on it.
@@ -162,7 +163,7 @@ export function isNonRetryableBody(body: string): boolean {
 // Call Anthropic directly from the browser — no Vercel timeout
 export async function synthesizeDirect(
   anthropicKey: string,
-  synthesisModel: "sonnet" | "opus",
+  synthesisModel: "sonnet" | "opus" | "fable",
   content: string,
   analysisPrompt: string,
   responses: Array<{ model: string; modelName: string; family: string; response: string }>,
@@ -176,9 +177,9 @@ export async function synthesizeDirect(
   const prompt = buildSynthesisPrompt(content, analysisPrompt, responses, context, customSynthesisInstructions);
 
   // Bounded retry for the synthesis call ONLY. The fan-out `responses` are already in
-  // hand, so a transient Opus failure (network "fetch failed", 429 rate-limit, 5xx) must
+  // hand, so a transient synthesis failure (network "fetch failed", 429 rate-limit, 5xx) must
   // NOT bubble up and trigger a full 10-model council re-run — that costs ~11 min + full
-  // council spend to recover one cheap Opus call. Retry transient failures with
+  // council spend to recover one synthesis call. Retry transient failures with
   // exponential backoff (~2s, 4s, 8s + jitter); fast-fail on 400/401/403 and on bodies
   // that name a permanent billing/auth/bad-request condition, where a retry can't help.
   const maxAttempts = retryOptions?.maxAttempts ?? 4;
