@@ -1,5 +1,9 @@
 # Model Prism — Codex operating rules
 
+## Portfolio Context Fabric bootstrap
+
+Before portfolio-wide work, request bounded task context with HOSS `hoss_get_context` (or its API/CLI equivalent) for `model-prism`; inspect current `master` and open PRs. Model Prism owns its review engine and MCP service. Reuse HOSS orchestration and Decision Fabric, and Brain reviewed knowledge; do not create duplicate generic portfolio systems. After implementation, submit a Context Fabric receipt and corrections/feedback through the HOSS interfaces. A receipt is an agent attestation, not canonical knowledge or deployment proof.
+
 Next.js model-evaluation and review app. Keep work scoped and evidence-driven.
 
 ## Usage discipline

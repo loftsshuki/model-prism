@@ -1,0 +1,40 @@
+schemaVersion: 1
+project:
+  id: model-prism
+  name: Model Prism
+  repo: loftsshuki/model-prism
+  description: Multi-model review and synthesis service with an authenticated Review Fabric MCP interface.
+goals:
+  - Provide evidence-grounded plan and code review with bounded model spending.
+northStarMetrics:
+  - Not declared by this provisional context manifest; verify owner-approved metrics before use.
+autonomyLevel: 0
+metadata:
+  provisional: true
+  contextOnly: true
+  contractOwnerVerified: false
+  canonicalBranch: master
+context:
+  owns:
+    - Model Prism review app, council orchestration and synthesis
+    - Review Fabric MCP surface, review run lifecycle and finding tracking
+    - Review-specific evaluation, spending limits and account boundaries
+  doesNotOwn:
+    - Portfolio context, source ingestion and decision routing
+    - Canonical reviewed cross-repository knowledge
+    - Product-specific implementation and domain rules
+  relations:
+    - {projectId: hoss, role: portfolio-context-and-decision-fabric}
+    - {projectId: brain, role: reviewed-knowledge}
+  importantPaths:
+    - AGENTS.md
+    - README.md
+    - docs/MCP_INTEGRATION.md
+    - src/lib/evaluation.ts
+    - src/lib/decision-gate.ts
+    - src/lib/mcp/review-tools.ts
+  constraints:
+    - Preserve per-account review isolation and existing budget gates.
+    - Inspect HOSS Review Fabric and Decision Fabric before adding generic portfolio review or decision machinery.
+    - Never treat model review as implementation proof or deployment verification.
+  knowledgeConcepts: []
