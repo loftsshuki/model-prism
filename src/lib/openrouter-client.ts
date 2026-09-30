@@ -136,7 +136,7 @@ export async function requestCompletion(opts: CompletionOptions): Promise<Comple
       await opts.budget?.settle(requestId, usage);
       settled = true; opts.onUsage?.(usage);
     };
-    const signal = AbortSignal.any([...(opts.signal ? [opts.signal] : []), AbortSignal.timeout(240000)]);
+    const signal = AbortSignal.any([...(opts.signal ? [opts.signal] : []), AbortSignal.timeout(600000)]);
     try {
       const effort = supportedEffort(model, opts.reasoningEffort);
       const parameters = model.supportedParameters;
