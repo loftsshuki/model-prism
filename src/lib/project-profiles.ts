@@ -1,4 +1,5 @@
 import { ModelSelectionPreset } from "./run-presets";
+import type { SynthesisModelKey } from "./model-catalog";
 
 export interface ProjectProfile {
   id: string;
@@ -6,7 +7,7 @@ export interface ProjectProfile {
   description: string;
   defaultRunPresetId: string;
   defaultModelPreset: ModelSelectionPreset;
-  defaultSynthesisModel: "sonnet" | "opus";
+  defaultSynthesisModel: SynthesisModelKey;
   defaultMaxCost: number;
   defaultContextPackName?: string;
 }
@@ -21,7 +22,7 @@ export const BUILT_IN_PROJECT_PROFILES: ProjectProfile[] = [
     description: "Next.js/Supabase luxury apartment marketplace with AI infra and plan-review hooks.",
     defaultRunPresetId: "plan-review",
     defaultModelPreset: "diverse",
-    defaultSynthesisModel: "opus",
+    defaultSynthesisModel: "fable",
     defaultMaxCost: 1.5,
     defaultContextPackName: "LuxuryApartments",
   },
@@ -31,7 +32,7 @@ export const BUILT_IN_PROJECT_PROFILES: ProjectProfile[] = [
     description: "Electron desktop UI around pi RPC, focused on safe visual coding workflows.",
     defaultRunPresetId: "code-review",
     defaultModelPreset: "diverse",
-    defaultSynthesisModel: "sonnet",
+    defaultSynthesisModel: "fable",
     defaultMaxCost: 0.75,
     defaultContextPackName: "Pi Desktop",
   },
@@ -41,7 +42,7 @@ export const BUILT_IN_PROJECT_PROFILES: ProjectProfile[] = [
     description: "Multi-model council, synthesis, context packs, and plan review automation.",
     defaultRunPresetId: "architecture-review",
     defaultModelPreset: "frontier",
-    defaultSynthesisModel: "opus",
+    defaultSynthesisModel: "fable",
     defaultMaxCost: 1.25,
     defaultContextPackName: "Model Prism",
   },

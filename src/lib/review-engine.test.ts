@@ -107,7 +107,7 @@ describe("freshness and evidence", () => {
     const small = { ...models[0], contextLength: 10000 }; expect(getModelsFilteredByContext([small], 3000, 8192).tooSmall.has(small.id)).toBe(true);
   });
   test("freshness checks include synthesis and cannot suggest a smaller product line", () => {
-    const sol = getModel("openai/gpt-5.6-sol")!, luna = getModel("openai/gpt-5.6-luna")!;
+    const sol = getModel("openai/gpt-6.1-sol")!, luna = getModel("openai/gpt-6-luna")!;
     const findings = checkModelFreshness([sol, { ...luna, created: (sol.created ?? 0) + 1000 }], [sol], [sol.id, SYNTHESIS_IDS.sonnet]);
     expect(findings.some((finding) => finding.id === SYNTHESIS_IDS.sonnet && finding.kind === "DEAD")).toBe(true); expect(findings.some((finding) => finding.kind === "CANDIDATE")).toBe(false);
   });

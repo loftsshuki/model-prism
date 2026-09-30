@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type { ContextPack, ModelInfo } from "@/lib/types";
 import { SNAPSHOT_CHECKED_AT, COUNCIL_IDS, COUNCIL_MAX_TOKENS, SNAPSHOT_MODELS, SYNTHESIS_IDS, SYNTHESIS_MAX_TOKENS, setRuntimeCatalog, type SynthesisModelKey } from "@/lib/model-catalog";
+import { getSynthesisPreference } from "@/lib/synthesis-preference";
 import { estimateReviewCost, estimateTokens, getModelsFilteredByContext } from "@/lib/model-registry";
 import { DEFAULT_TEMPLATES, type PromptTemplate } from "@/lib/prompts";
 import { DEFAULT_RUN_PRESETS, selectModelsForPreset, type ModelSelectionPreset } from "@/lib/run-presets";
@@ -38,7 +39,7 @@ export default function Home() {
   const [githubPat, setGithubPat] = useState("");
   const [rememberKey, setRememberKey] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
-  const [synthesisModel, setSynthesisModel] = useState<SynthesisModelKey>("sonnet");
+  const [synthesisModel, setSynthesisModel] = useState<SynthesisModelKey>("fable");
   const [maxCost, setMaxCost] = useState(1.5);
   const [maxTokens, setMaxTokens] = useState(COUNCIL_MAX_TOKENS);
   const [synthesisMaxTokens, setSynthesisMaxTokens] = useState(SYNTHESIS_MAX_TOKENS);
@@ -87,8 +88,7 @@ export default function Home() {
       const storedKey = sessionStorage.getItem("openrouter-api-key") || localStorage.getItem("openrouter-api-key") || "";
       setApiKey(storedKey); await prepareCloudAccess(storedKey);
       setRememberKey(Boolean(localStorage.getItem("openrouter-api-key")));
-      const storedSynth = localStorage.getItem("synthesis-model");
-      if (storedSynth && storedSynth in SYNTHESIS_IDS) setSynthesisModel(storedSynth as SynthesisModelKey);
+      setSynthesisModel(getSynthesisPreference());
       setGithubPat(localStorage.getItem("github-pat") || "");
       const storedProfiles = getProjectProfiles();
       setProfiles(storedProfiles);
@@ -154,7 +154,7 @@ export default function Home() {
     review.restore(snapshot); setContent(snapshot.content); setPrompt(snapshot.prompt); setRestoredContext(snapshot.context);
     setReasoning(snapshot.reasoningEffort); setSelected(new Set(snapshot.models.map((model) => model.id)));
     setMaxCost(snapshot.maxCost); setMaxTokens(snapshot.maxTokens); setSynthesisMaxTokens(snapshot.synthesisMaxTokens);
-    setSynthesisModel((Object.entries(SYNTHESIS_IDS).find(([, id]) => id === snapshot.synthesisModel)?.[0] as SynthesisModelKey) ?? "sonnet");
+    setSynthesisModel((Object.entries(SYNTHESIS_IDS).find(([, id]) => id === snapshot.synthesisModel)?.[0] as SynthesisModelKey) ?? "fable");
     setMobileTab("results");
     setSourceDocuments(snapshot.sources ?? []); setSourceContent(snapshot.content);
     setProjectKey(snapshot.projectKey ?? "default"); setAdaptive(snapshot.adaptive?.enabled ?? false);
