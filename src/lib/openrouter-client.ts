@@ -1,5 +1,5 @@
 import { getModel } from "./model-catalog";
-import { BudgetExceededError, requestCeiling, requestCost, type RequestBudget } from "./run-budget";
+import { affordableOutputTokens, BudgetExceededError, requestCeiling, requestCost, type RequestBudget } from "./run-budget";
 import type { ModelInfo, ModelUsage } from "./types";
 
 export interface ToolCall { id: string; type: "function"; function: { name: string; arguments: string } }
@@ -42,7 +42,14 @@ export interface CompletionOptions {
   maxAttempts?: number;
   baseDelayMs?: number;
   fetchImpl?: typeof fetch;
+  /** When set, shrink max_tokens (down to this floor) to fit the remaining budget instead of refusing the request. */
+  minMaxTokens?: number;
+  /** Override the provider deadline (tests). */
+  timeoutMs?: number;
 }
+
+/** Wall-clock limit for one provider request. Keep below the worker's request-lease renewal horizon. */
+export const PROVIDER_TIMEOUT_MS = 600_000;
 
 export function supportedEffort(model: ModelInfo, effort = "medium") {
   const supported = model.reasoning?.supported_efforts;
@@ -128,15 +135,32 @@ export async function requestCompletion(opts: CompletionOptions): Promise<Comple
   for (let attempt = 0; attempt < attempts; attempt++) {
     opts.signal?.throwIfAborted();
     const requestId = crypto.randomUUID();
-    const ceiling = requestCeiling(model, opts.messages, maxTokens, opts.tools);
-    await opts.budget?.reserve(requestId, ceiling);
+    let attemptTokens = maxTokens;
+    if (opts.minMaxTokens !== undefined && opts.budget?.available) {
+      // A long synthesis input can push the worst-case ceiling past what is left
+      // after the council. Shrink the output allowance rather than discard the paid council.
+      const available = await opts.budget.available();
+      const affordable = affordableOutputTokens(model, opts.messages, available, opts.tools);
+      if (affordable < attemptTokens) {
+        const floor = Math.min(opts.minMaxTokens, maxTokens);
+        if (affordable < floor) {
+          const needed = requestCeiling(model, opts.messages, floor, opts.tools);
+          throw new BudgetExceededError(`${model.name} needs up to $${needed.toFixed(2)} for even a ${floor.toLocaleString()}-token answer, but only $${Math.max(0, available).toFixed(2)} of the spending limit is left. Raise the limit to resume; completed work is kept.`);
+        }
+        attemptTokens = affordable;
+      }
+    }
+    const ceiling = requestCeiling(model, opts.messages, attemptTokens, opts.tools);
+    await opts.budget?.reserve(requestId, ceiling, model.id);
     let sent = false;
     let settled = false;
     const settle = async (usage: ModelUsage) => {
       await opts.budget?.settle(requestId, usage);
       settled = true; opts.onUsage?.(usage);
     };
-    const signal = AbortSignal.any([...(opts.signal ? [opts.signal] : []), AbortSignal.timeout(600000)]);
+    const timeoutMs = opts.timeoutMs ?? PROVIDER_TIMEOUT_MS;
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const signal = AbortSignal.any([...(opts.signal ? [opts.signal] : []), timeout]);
     try {
       const effort = supportedEffort(model, opts.reasoningEffort);
       const parameters = model.supportedParameters;
@@ -145,7 +169,7 @@ export async function requestCompletion(opts: CompletionOptions): Promise<Comple
       const res = await (opts.fetchImpl ?? fetch)("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST", signal,
         headers: { Authorization: `Bearer ${opts.apiKey}`, "Content-Type": "application/json", "X-Title": "Model Prism", "HTTP-Referer": "https://model-prism.vercel.app" },
-        body: JSON.stringify({ model: model.id, messages: opts.messages, max_tokens: maxTokens,
+        body: JSON.stringify({ model: model.id, messages: opts.messages, max_tokens: attemptTokens,
           stream: true, stream_options: { include_usage: true },
           ...(effort && supports("reasoning") ? { reasoning: { effort } } : {}),
           ...(opts.tools?.length ? { tools: opts.tools, ...(supports("tool_choice") ? { tool_choice: opts.toolChoice ?? "auto" } : {}) } : {}),
@@ -174,6 +198,9 @@ export async function requestCompletion(opts: CompletionOptions): Promise<Comple
         if (sent) await settle({ requestId, model: model.id, inputTokens: 0, outputTokens: 0, cost: ceiling, costSource: "reserved" });
         else await opts.budget?.release(requestId);
       }
+      // Our own deadline is not a user Stop: report it as a provider failure. The
+      // reserved ceiling stays recorded because the provider may still bill it.
+      if (timeout.aborted && !opts.signal?.aborted) throw new ProviderError(`${model.name} did not finish within ${Math.round(timeoutMs / 60000) || 1} minute(s). Its reserved cost is kept; resume to retry it.`, 504);
       if (isCancelled(error) || opts.signal?.aborted || error instanceof BudgetExceededError) throw error;
       if (error instanceof ProviderError && !error.retryable) throw error;
       if (attempt + 1 >= attempts) throw error;

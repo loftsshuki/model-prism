@@ -54,9 +54,18 @@ Review depth is risk-adaptive:
 
 | Criticality | Council | Synthesis | Default max cost |
 | --- | --- | --- | ---: |
-| low | cheap/adaptive | Sonnet | $2.50 |
-| medium | balanced/adaptive | Opus | $6.00 |
-| high | frontier/full | Opus | $12.00 |
+| low | cheap/adaptive | Fable 5.1 | $2.50 |
+| medium | balanced/adaptive | Fable 5.1 | $6.00 |
+| high | frontier/full | Fable 5.1 | $12.00 |
+
+Synthesis uses Claude Fable 5.1 and falls back to Opus 5.5, then Sonnet 5.5, when Fable is unavailable or
+lacks tool support. A `maxCost` too small to cover the council plus the smallest synthesis is rejected
+with a 400 before any spend. When the remaining budget cannot cover the full synthesis output, the
+synthesis output allowance shrinks to fit (never below 8,192 tokens) instead of failing.
+
+An identical retry with the same submission ID returns the existing run, even if the live catalog has
+changed since the first attempt. A saved review whose workflow never started is dispatched again on the
+next retry or status read.
 
 High-risk reviews always use the full selected council. All review runs preserve the existing durable
 budget, replay, cancellation, lease and workflow semantics.

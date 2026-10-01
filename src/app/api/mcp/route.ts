@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { publicErrorMessage } from "@/lib/server/http";
 import { oauthOwner } from "@/lib/api-auth";
 import { MCP_TOOLS, invokeMcpTool } from "@/lib/mcp/review-tools";
 
@@ -125,8 +126,7 @@ export async function POST(req: NextRequest) {
     try {
       return jsonRpc(id, toolResult(await invokeMcpTool(auth.owner!, name, args)));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Model Prism tool failed";
-      return jsonRpc(id, toolError(message));
+      return jsonRpc(id, toolError(publicErrorMessage(error)));
     }
   }
 

@@ -35,15 +35,18 @@ export default function HistoryPage() {
   const { userId } = useAccount();
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
+    // A failed load used to render "No runs yet", which looks like lost history.
     fetch("/api/runs", { headers: authHeaders() })
-      .then((r) => r.json())
-      .then((data) => {
-        setRuns(data.runs || []);
-        setLoading(false);
+      .then(async (r) => {
+        if (!r.ok) throw new Error(r.status === 401 ? "History needs your admin token or key. Check Settings, then reload." : `History could not load (${r.status}). Your saved reviews are not affected; reload to try again.`);
+        return r.json();
       })
-      .catch(() => setLoading(false));
+      .then((data) => setRuns(data.runs || []))
+      .catch((error) => setLoadError(error instanceof Error && error.message.startsWith("History") ? error.message : "History could not load. Your saved reviews are not affected; reload to try again."))
+      .finally(() => setLoading(false));
   }, []);
 
   return (
@@ -79,7 +82,11 @@ export default function HistoryPage() {
           <div className="text-center text-grey-40 py-12">Loading...</div>
         )}
 
-        {!loading && runs.length === 0 && (
+        {!loading && loadError && (
+          <div role="alert" className="border border-red-300 bg-red-50 p-4 text-sm text-red-800">{loadError}</div>
+        )}
+
+        {!loading && !loadError && runs.length === 0 && (
           <div className="text-center text-grey-40 py-12">
             No runs yet. <Link href="/" className="text-green hover:underline">Start your first analysis.</Link>
           </div>

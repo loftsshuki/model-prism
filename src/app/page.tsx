@@ -9,9 +9,10 @@ import { estimateReviewCost, estimateTokens, getModelsFilteredByContext } from "
 import { DEFAULT_TEMPLATES, type PromptTemplate } from "@/lib/prompts";
 import { DEFAULT_RUN_PRESETS, selectModelsForPreset, type ModelSelectionPreset } from "@/lib/run-presets";
 import { getActiveProjectProfileId, getProjectProfiles, setActiveProjectProfileId, type ProjectProfile } from "@/lib/project-profiles";
-import { buildContextString, getActivePackId, getContextPacks } from "@/lib/context-packs";
+import { buildContextString, getActivePackId, getContextPacks, setActivePackId } from "@/lib/context-packs";
 import { getCachedFileContent } from "@/lib/context-cache";
 import { checkpointCost, checkpointMarkdown, sameReviewInput, type RunCheckpoint } from "@/lib/run-checkpoint";
+import { requiredRunBudget } from "@/lib/run-budget";
 import { useReviewRun } from "@/lib/use-review-run";
 import { prepareCloudAccess } from "@/lib/client-api";
 import { ModelPicker } from "@/components/model-picker";
@@ -22,7 +23,7 @@ import { SynthesisComparisonView } from "@/components/synthesis-comparison";
 import { CompareView } from "@/components/compare-view";
 import { FindingTracker } from "@/components/finding-tracker";
 import { diffSourceDocuments } from "@/lib/finding-tracking";
-import type { SourceDocument } from "@/lib/review-policy";
+import { fitSources, MAX_SOURCE_TOTAL_CHARS, MAX_SOURCES, type SourceDocument } from "@/lib/review-policy";
 import { DEFAULT_DECISION_MODES, type DecisionMode } from "@/lib/decision-gate";
 
 const field = "mt-1 w-full min-w-0 border border-border bg-white px-3 py-2.5 text-sm text-ink focus:border-green";
@@ -40,7 +41,7 @@ export default function Home() {
   const [rememberKey, setRememberKey] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
   const [synthesisModel, setSynthesisModel] = useState<SynthesisModelKey>("fable");
-  const [maxCost, setMaxCost] = useState(1.5);
+  const [maxCost, setMaxCost] = useState(DEFAULT_RUN_PRESETS[0].maxCost);
   const [maxTokens, setMaxTokens] = useState(COUNCIL_MAX_TOKENS);
   const [synthesisMaxTokens, setSynthesisMaxTokens] = useState(SYNTHESIS_MAX_TOKENS);
   const [reasoning, setReasoning] = useState("medium");
@@ -67,6 +68,7 @@ export default function Home() {
   const [prLoading, setPrLoading] = useState(false);
   const [preflight, setPreflight] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [mobileTab, setMobileTab] = useState<"setup" | "results">("setup");
   const [compareIds, setCompareIds] = useState<Set<string>>(new Set());
   const [showCompare, setShowCompare] = useState(false);
@@ -125,7 +127,10 @@ export default function Home() {
 
   const context = restoredContext ?? (contextEnabled && activePack ? buildContextString(activePack, fileContents) : "");
   const missingContext = contextEnabled && activePack && restoredContext === null ? activePack.selectedFiles.filter((path) => !Object.hasOwn(fileContents, path)) : [];
-  const effectiveProjectKey = activePack && contextEnabled ? activePack.repo : projectKey.trim() || "default";
+  // A restored run keeps its saved context and project; an active pack applies only
+  // once the user chooses different context. Otherwise Resume became "Run edited input".
+  const packApplies = restoredContext === null && Boolean(activePack && contextEnabled);
+  const effectiveProjectKey = packApplies && activePack ? activePack.repo : projectKey.trim() || "default";
   const input = { content, prompt, context, reasoningEffort: reasoning, projectKey: effectiveProjectKey };
   const sameInput = Boolean(review.run && sameReviewInput(review.run, input));
   const inputTokens = estimateTokens(content + prompt + context);
@@ -183,13 +188,29 @@ export default function Home() {
       const missing = [...ids].filter((id) => !models.some((model) => model.id === id));
       if (missing.length) throw new Error(`Unavailable models: ${missing.join(", ")}. Choose a refreshed roster.`);
       if (models.length < 2) throw new Error("Select at least two reviewers to compare their answers.");
-      if (!currentModels.some((model) => model.id === SYNTHESIS_IDS[synthesisModel])) throw new Error("The selected synthesizer is unavailable. Choose another.");
+      const synthesizer = currentModels.find((model) => model.id === SYNTHESIS_IDS[synthesisModel]);
+      if (!synthesizer) throw new Error("The selected synthesizer is unavailable. Choose another.");
+      // Refuse before any spend when the limit cannot hold the reservations this run
+      // will need. Otherwise the council is paid for and synthesis is then refused.
+      const resuming = sameInput && review.run ? review.run : null;
+      const completed = new Set(resuming?.responses.filter((response) => response.status === "complete").map((response) => response.requestedModel ?? response.model) ?? []);
+      const pendingReviewers = secondPass ? [] : models.filter((model) => !completed.has(model.id));
+      // The engine keeps an existing synthesis when nothing new is reviewed and the synthesizer is unchanged.
+      const needsSynthesis = secondPass || !resuming?.synthesis || pendingReviewers.length > 0 || resuming.synthesisModel !== synthesizer.id;
+      const needed = requiredRunBudget({ reviewers: pendingReviewers, synthesizer: needsSynthesis ? synthesizer : undefined, inputText: content + prompt + context, maxTokens, synthesisMaxTokens, reviewersAnswering: models.length });
+      const spent = resuming ? checkpointCost(resuming) : 0;
+      if (spent + needed.total > maxCost) {
+        const minimum = Math.ceil((spent + needed.total) * 4) / 4;
+        throw new Error(`This setup can reserve up to $${needed.total.toFixed(2)} at once (reviewers $${needed.council.toFixed(2)}, synthesis $${needed.synthesis.toFixed(2)})${spent ? ` on top of $${spent.toFixed(2)} already recorded` : ""}. Raise the spending limit to at least $${minimum.toFixed(2)}, or choose a smaller synthesis output budget or synthesizer. Unused reservations are not charged.`);
+      }
       setRuntimeCatalog(currentModels); setAllModels(currentModels); setSelected(ids); setCatalogNote(`Live catalog · checked ${String(catalog.checkedAt).slice(0, 10)}`);
       setMobileTab("results"); setCompareIds(new Set());
-      const sources = sameInput && review.run?.sources ? review.run.sources : [
+      const fitted = fitSources(sameInput && review.run?.sources ? review.run.sources : [
         ...(sourceContent === content ? sourceDocuments : []),
         ...(contextEnabled && activePack && restoredContext === null ? activePack.selectedFiles.map(path => ({ id: `file:${path}`, path, text: fileContents[path] })) : []),
-      ].filter((source, index, all) => all.findIndex(item => item.id === source.id) === index);
+      ].filter((source, index, all) => all.findIndex(item => item.id === source.id) === index));
+      const sources = fitted.sources;
+      setNotice(fitted.dropped ? `${fitted.dropped} source file(s) are over the evidence limits (${MAX_SOURCES} files, ${MAX_SOURCE_TOTAL_CHARS.toLocaleString()} characters) and are not used to verify citations. The review still sees the full content.` : null);
       await review.start({ ...input, apiKey, models, catalog: currentModels, synthesisModel: SYNTHESIS_IDS[synthesisModel], maxCost, maxTokens, synthesisMaxTokens, allowPaidFallback: allowFallback,
         background, adaptive: background && adaptive, risk,
         decisionModes: {
@@ -245,6 +266,7 @@ export default function Home() {
         <span>Saved review from {new Date(review.restorable.updatedAt).toLocaleString()} · {review.restorable.responses.filter((response) => response.status === "complete").length} completed answers.</span>
         <button className={button} disabled={busy} onClick={() => restore(review.restorable!)}>Restore review</button><button className={button} onClick={review.dismissRestore}>Dismiss</button>
       </div>}
+      {notice && <p role="status" className="m-4 border border-gold bg-white p-3 text-sm">{notice}</p>}
       {(error || review.saveError) && <div role="alert" className="m-4 border border-red-300 bg-red-50 p-4 text-sm text-red-800 space-y-2">
         {error && <p>{error}</p>}{review.saveError && <p>{review.saveError} <button onClick={review.retrySave} className="underline">Retry save</button></p>}
       </div>}
@@ -255,14 +277,25 @@ export default function Home() {
         <section id="review-setup" aria-label="Review setup" className={`${mobileTab === "setup" ? "block" : "hidden"} min-w-0 bg-white p-4 sm:p-6 lg:block lg:border-r border-border`}>
           <fieldset disabled={busy} className="min-w-0 space-y-6 disabled:opacity-70">
             <div className="grid gap-3 sm:grid-cols-2">
-              <label className="text-sm">Project for finding history<input value={activePack && contextEnabled ? activePack.repo : projectKey} disabled={Boolean(activePack && contextEnabled)} onChange={event => setProjectKey(event.target.value)} maxLength={200} className={field} placeholder="e.g. owner/repository" /></label>
+              <label className="text-sm">Project for finding history<input value={packApplies && activePack ? activePack.repo : projectKey} disabled={packApplies} onChange={event => setProjectKey(event.target.value)} maxLength={200} className={field} placeholder="e.g. owner/repository" /></label>
               <label className="text-sm">Project profile<select className={field} value={profileId} onChange={(event) => {
                 const id = event.target.value; setProfileId(id); setActiveProjectProfileId(id);
                 const profile = profiles.find((item) => item.id === id);
                 if (profile) {
                   applyPreset(profile.defaultRunPresetId); setSelected(selectModelsForPreset(allModels, profile.defaultModelPreset, tooSmall)); setSynthesisModel(profile.defaultSynthesisModel); setMaxCost(profile.defaultMaxCost);
                   const pack = getContextPacks().find((item) => item.name === profile.defaultContextPackName);
-                  if (pack) { setActivePack(pack); setContextEnabled(true); setRestoredContext(null); setFileContents({}); }
+                  if (pack) {
+                    setActivePack(pack); setActivePackId(pack.id); setContextEnabled(true); setRestoredContext(null); setFileContents({});
+                    // Without the cached files, Run refused with "Load the N missing context file(s)".
+                    void (async () => {
+                      const files: Record<string, string> = {};
+                      for (const path of pack.selectedFiles) {
+                        const cached = await getCachedFileContent(pack.repo, pack.branch, path);
+                        if (cached) files[path] = cached.content;
+                      }
+                      setFileContents(files);
+                    })();
+                  }
                 }
               }}><option value="">Custom review</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>
               <label className="text-sm">Review template<select className={field} value={templateId} onChange={(event) => applyPreset(event.target.value)}>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
@@ -280,7 +313,7 @@ export default function Home() {
               <label className="text-sm">Synthesis model<select value={synthesisModel} onChange={(event) => setSynthesisModel(event.target.value as SynthesisModelKey)} className={field}>{Object.entries(SYNTHESIS_IDS).map(([key, id]) => <option key={key} value={key}>{SNAPSHOT_MODELS.find((model) => model.id === id)?.name ?? id}</option>)}</select></label>
               <label className="text-sm">Spending limit (USD)<input type="number" min="0.01" step="0.25" value={maxCost} onChange={(event) => setMaxCost(Number(event.target.value))} className={field} /></label>
               <label className="text-sm">Reasoning effort<select value={reasoning} onChange={(event) => setReasoning(event.target.value)} className={field}>{["low", "medium", "high", "max"].map((effort) => <option key={effort}>{effort}</option>)}</select></label>
-              <label className="text-sm">Reviewer output budget<select value={maxTokens} onChange={(event) => setMaxTokens(Number(event.target.value))} className={field}>{[8192, 16384, 32768].map((tokens) => <option key={tokens} value={tokens}>{tokens.toLocaleString()} tokens</option>)}</select></label>
+              <label className="text-sm">Reviewer output budget<select value={maxTokens} onChange={(event) => setMaxTokens(Number(event.target.value))} className={field}>{[8192, 16384, COUNCIL_MAX_TOKENS, 32768].filter((tokens, index, all) => all.indexOf(tokens) === index).sort((a, b) => a - b).map((tokens) => <option key={tokens} value={tokens}>{tokens.toLocaleString()} tokens</option>)}</select></label>
               <label className="text-sm">Synthesis output budget<select value={synthesisMaxTokens} onChange={(event) => setSynthesisMaxTokens(Number(event.target.value))} className={field}>{[16384, 32768, 65536].map((tokens) => <option key={tokens} value={tokens}>{tokens.toLocaleString()} tokens</option>)}</select></label>
             </div>
             <label className="flex gap-2 items-start text-sm"><input type="checkbox" checked={allowFallback} onChange={(event) => setAllowFallback(event.target.checked)} className="mt-1" />Allow a paid replacement for an unavailable free reviewer, within the spending limit.</label>
@@ -317,7 +350,7 @@ export default function Home() {
             </div>
             {review.run.synthesis && <SynthesisView synthesis={review.run.synthesis} onSecondPass={sameInput && !busy ? () => start(true) : undefined} secondPassLoading={busy} />}
             {review.run.secondPass && review.run.synthesis && <><SynthesisComparisonView previous={review.run.synthesis} next={review.run.secondPass} /><SynthesisView synthesis={review.run.secondPass} title="Second pass" /></>}
-            {review.run.synthesis && !busy && <FindingTracker runId={review.run.id} revision={review.run.revision} />}
+            {review.run.synthesis && !busy && (review.run.background || review.savedRevision >= review.run.revision) && <FindingTracker runId={review.run.id} revision={review.run.background ? review.run.revision : review.savedRevision} />}
             <h2 className="font-display text-2xl">Council responses</h2>
             {responses.map((response) => <ResponseCard key={response.requestedModel ?? response.model} response={response} compareMode={!busy} isComparing={compareIds.has(response.model)} onToggleCompare={() => setCompareIds((current) => { const next = new Set(current); if (next.has(response.model)) next.delete(response.model); else next.add(response.model); return next; })} />)}
           </>}

@@ -5,7 +5,7 @@ import { fetchModelCatalog } from "../model-catalog";
 import { escalationReasons } from "../review-policy";
 import { decryptCredential } from "./credentials";
 import { evaluatePostSynthesisEscalation, evaluatePreReviewDepth } from "./review-decision-gates";
-import { beginOperation, changeJob, claimWorkflow, finishOperation, jobIsActive, loadWorkerJob, PersistentRunBudget, setJobState, type WorkerJob } from "./background-store";
+import { beginOperation, changeJob, claimWorkflow, finishOperation, jobIsActive, loadWorkerJob, PersistentRunBudget, renewOperationLease, setJobState, type WorkerJob } from "./background-store";
 import { recordFindings } from "./finding-store";
 
 export async function prepareReview(runId: string, execution: number, workflowId: string) {
@@ -38,16 +38,26 @@ function keyFor(job: WorkerJob) {
   if (!job.credential || Date.parse(job.credentialExpires) <= Date.now()) throw new Error("Reconnect your provider key and resume this review");
   return decryptCredential(job.credential, `${job.owner}:${job.runId}:${job.execution}`);
 }
-function cancellation(runId: string, execution: number) {
+const POLL_MS = 2000;
+const HEARTBEAT_EVERY = 30; // polls, so the lease is renewed every minute
+const MAX_POLL_FAILURES = 3;
+/**
+ * Watches for Stop while a provider request runs, and renews the request lease.
+ * Only a confirmed inactive job aborts the request: a single failed database
+ * read used to cancel a paid request and silently drop that reviewer.
+ */
+function cancellation(runId: string, execution: number, slot: string) {
   const controller = new AbortController();
-  let reading = false;
+  let reading = false, failures = 0, polls = 0;
   const interval = setInterval(() => {
     if (reading) return;
-    reading = true;
-    void jobIsActive(runId, execution).then(active => {
+    reading = true; polls++;
+    const heartbeat = polls % HEARTBEAT_EVERY === 0 ? renewOperationLease(runId, execution, slot) : Promise.resolve();
+    void heartbeat.then(() => jobIsActive(runId, execution)).then(active => {
+      failures = 0;
       if (!active) controller.abort();
-    }).catch(() => controller.abort()).finally(() => { reading = false; });
-  }, 2000);
+    }).catch(() => { if (++failures >= MAX_POLL_FAILURES) controller.abort(); }).finally(() => { reading = false; });
+  }, POLL_MS);
   return { signal: controller.signal, dispose: () => clearInterval(interval) };
 }
 async function canStart(runId: string, execution: number, slot: string) {
@@ -67,7 +77,7 @@ export async function reviewModel(runId: string, execution: number, modelId: str
   if (!await canStart(runId, execution, slot)) return;
   const model = job.snapshot.models.find(item => item.id === modelId);
   if (!model) return;
-  const cancel = cancellation(runId, execution);
+  const cancel = cancellation(runId, execution, slot);
   try {
     const catalog = job.config.allowPaidFallback && model.tier === "free" ? await fetchModelCatalog(cancel.signal) : job.snapshot.models;
     const [response] = await fanOut({ models: [model], catalog, apiKey: keyFor(job),
@@ -103,7 +113,7 @@ export async function synthesizeReview(runId: string, execution: number, phase: 
     const current = await loadWorkerJob(runId);
     return !current.cancelRequested && current.snapshot.background?.state === "running" && Boolean(phase === "secondPass" ? current.snapshot.secondPass : current.snapshot.synthesis);
   }
-  const cancel = cancellation(runId, execution);
+  const cancel = cancellation(runId, execution, slot);
   try {
     const catalog = await fetchModelCatalog(cancel.signal);
     const model = catalog.find(item => item.id === job.snapshot.synthesisModel);
@@ -180,7 +190,11 @@ export async function finishReview(runId: string, execution: number) {
   "use step";
   const job = await loadWorkerJob(runId);
   if (job.execution !== execution || job.cancelRequested || ["error", "stopped"].includes(job.snapshot.background!.state)) return;
-  await recordFindings(job.snapshot, job.owner);
+  // Indexing findings is bookkeeping on a finished review. Its failure must not
+  // relabel the saved synthesis as an interrupted worker.
+  let indexError: string | undefined;
+  try { await recordFindings(job.snapshot, job.owner); }
+  catch { indexError = "Finding tracking could not be updated for this review. The synthesis is saved; open the review again to retry tracking."; }
   const incomplete = job.snapshot.responses.some(response => response.status !== "complete");
-  await setJobState(runId, execution, "complete", incomplete ? "Some reviewers were incomplete and excluded. Resume to retry them." : undefined);
+  await setJobState(runId, execution, "complete", [incomplete ? "Some reviewers were incomplete and excluded. Resume to retry them." : undefined, indexError].filter(Boolean).join(" ") || undefined);
 }

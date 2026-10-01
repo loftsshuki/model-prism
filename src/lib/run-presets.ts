@@ -11,6 +11,7 @@ export interface RunPreset {
   prompt: string;
   modelPreset: ModelSelectionPreset;
   synthesisModel: SynthesisModelKey;
+  /** Spending cap, not expected spend. Must cover the four largest reviewer reservations plus a full synthesis reservation (see requiredRunBudget). */
   maxCost: number;
 }
 
@@ -21,7 +22,7 @@ export const DEFAULT_RUN_PRESETS: RunPreset[] = [
     description: "Adversarial review before implementation.",
     modelPreset: "diverse",
     synthesisModel: "fable",
-    maxCost: 1.5,
+    maxCost: 4,
     prompt: `Review this implementation plan before execution. Identify fatal flaws, production landmines, missing requirements, sequencing risks, and high-ROI improvements. Be specific, cite exact sections or files when possible, and finish with a clear approve / revise / reject recommendation.`,
   },
   {
@@ -30,7 +31,7 @@ export const DEFAULT_RUN_PRESETS: RunPreset[] = [
     description: "Find bugs, security issues, and maintainability problems.",
     modelPreset: "diverse",
     synthesisModel: "fable",
-    maxCost: 1.25,
+    maxCost: 4,
     prompt: `Review this code or diff. Focus on correctness, security, performance, edge cases, maintainability, and missing tests. Prioritize concrete findings over style opinions. Include exact fixes or refactor recommendations where possible.`,
   },
   {
@@ -39,7 +40,7 @@ export const DEFAULT_RUN_PRESETS: RunPreset[] = [
     description: "Threat-model secrets, auth, data access, and unsafe flows.",
     modelPreset: "frontier",
     synthesisModel: "fable",
-    maxCost: 2,
+    maxCost: 7,
     prompt: `Perform a security review. Look for exposed secrets, auth/authorization flaws, unsafe data access, injection risks, insecure defaults, dangerous automation, supply-chain risks, and privacy issues. Rank findings by severity and provide practical remediation steps.`,
   },
   {
@@ -48,7 +49,7 @@ export const DEFAULT_RUN_PRESETS: RunPreset[] = [
     description: "Pressure-test UX, positioning, and customer value.",
     modelPreset: "diverse",
     synthesisModel: "fable",
-    maxCost: 0.75,
+    maxCost: 4,
     prompt: `Critique this product idea, feature, or UX. Evaluate value proposition, target user clarity, friction, missing user journeys, differentiation, and launch risks. Suggest concrete improvements and the smallest useful next experiment.`,
   },
   {
@@ -57,7 +58,7 @@ export const DEFAULT_RUN_PRESETS: RunPreset[] = [
     description: "Review seams, data flow, reliability, and future change cost.",
     modelPreset: "frontier",
     synthesisModel: "fable",
-    maxCost: 1.75,
+    maxCost: 7,
     prompt: `Review this architecture. Evaluate module boundaries, interfaces, data flow, scalability, reliability, operational risk, testability, migration path, and blast radius. Identify the highest-leverage simplifications and the most dangerous coupling.`,
   },
   {
@@ -66,7 +67,7 @@ export const DEFAULT_RUN_PRESETS: RunPreset[] = [
     description: "Generate hypotheses and debugging steps for hard failures.",
     modelPreset: "diverse",
     synthesisModel: "fable",
-    maxCost: 0.9,
+    maxCost: 4,
     prompt: `Help debug this issue. Generate likely root causes, evidence to gather, commands or checks to run, and a prioritized fix plan. Separate confirmed facts from hypotheses. Prefer fast, reversible debugging steps first.`,
   },
 ];

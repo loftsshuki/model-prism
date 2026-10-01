@@ -86,3 +86,27 @@ test("responsive navigation and selected controls remain usable", async ({ page 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), route).toBe(true);
   }
 });
+
+test("a spending limit that cannot pay for synthesis is refused before any spend", async ({ page }) => {
+  const { calls } = await setup(page);
+  await page.getByLabel("Content to review", { exact: true }).fill("BUDGET_FIXTURE");
+  await page.getByLabel("Spending limit (USD)").fill("1");
+  await page.getByTestId("run-button").click();
+  await expect(page.getByRole("alert").filter({ hasText: "Raise the spending limit to at least" })).toBeVisible();
+  expect(calls).toHaveLength(0);
+});
+
+test("leaving during a browser run asks first, and a confirmed exit saves the stopped run", async ({ page }) => {
+  const { saves } = await setup(page, { delay: true });
+  await page.getByLabel("Content to review", { exact: true }).fill("LEAVE_FIXTURE");
+  await page.getByTestId("run-button").click();
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+  page.once("dialog", (dialog) => void dialog.dismiss());
+  await page.getByRole("link", { name: "History", exact: true }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+  page.once("dialog", (dialog) => void dialog.accept());
+  await page.getByRole("link", { name: "History", exact: true }).click();
+  await expect(page).toHaveURL(/\/history$/);
+  await expect.poll(() => saves.some((run) => run.content === "LEAVE_FIXTURE" && run.status === "stopped")).toBe(true);
+});

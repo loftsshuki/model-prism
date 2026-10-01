@@ -10,6 +10,28 @@ export const SourceDocumentSchema = z.object({
 }).refine(source => !source.lineNumbers || source.lineNumbers.length === source.text.split("\n").length, "Source line map does not match the file");
 export type SourceDocument = z.infer<typeof SourceDocumentSchema>;
 
+export const MAX_SOURCES = 100;
+export const MAX_SOURCE_TOTAL_CHARS = 1_500_000;
+
+/**
+ * Keep the source files (used to verify finding citations) within what the
+ * checkpoint and background schemas accept. A 101-file PR used to make every
+ * save fail, and on reload the local copy was discarded too. Files that don't
+ * fit are left out of evidence checks; the review itself still runs.
+ */
+export function fitSources(sources: SourceDocument[]): { sources: SourceDocument[]; dropped: number } {
+  const kept: SourceDocument[] = [];
+  let total = 0;
+  for (const source of sources) {
+    if (kept.length >= MAX_SOURCES) break;
+    if (!SourceDocumentSchema.safeParse(source).success) continue;
+    if (total + source.text.length > MAX_SOURCE_TOTAL_CHARS) continue;
+    kept.push(source);
+    total += source.text.length;
+  }
+  return { sources: kept, dropped: sources.length - kept.length };
+}
+
 export const DecisionModesSchema = z.object({
   preReview: z.enum(DECISION_MODES).default(DEFAULT_DECISION_MODES.preReview),
   escalation: z.enum(DECISION_MODES).default(DEFAULT_DECISION_MODES.escalation),
@@ -27,8 +49,8 @@ export const BackgroundReviewSchema = z.object({
   allowPaidFallback: z.boolean().default(false),
   secondPass: z.boolean().default(false), contextMetadata: z.string().max(20_000).optional(),
   projectKey: z.string().trim().min(1).max(200).default("default"), baselineRunId: z.string().max(100).optional(),
-  sources: z.array(SourceDocumentSchema).max(100).default([]),
-}).refine(input => input.sources.reduce((sum, source) => sum + source.text.length, 0) <= 1_500_000, "Attached source files exceed the review limit")
+  sources: z.array(SourceDocumentSchema).max(MAX_SOURCES).default([]),
+}).refine(input => input.sources.reduce((sum, source) => sum + source.text.length, 0) <= MAX_SOURCE_TOTAL_CHARS, "Attached source files exceed the review limit")
   .refine(input => new Set(input.sources.map(source => source.id)).size === input.sources.length, "Source IDs must be unique");
 export type BackgroundReviewInput = z.infer<typeof BackgroundReviewSchema>;
 
