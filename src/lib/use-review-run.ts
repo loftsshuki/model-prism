@@ -22,6 +22,9 @@ export function useReviewRun() {
   const watching = useRef(0);
   const mounted = useRef(true);
   const starting = useRef(false);
+  // A background start whose POST has not returned yet. Stop pressed in that window
+  // is remembered and sent once the server confirms the run id.
+  const pendingStart = useRef<{ stop: boolean } | null>(null);
   const saving = useRef(Promise.resolve());
   const pending = useRef(new Map<string, RunCheckpoint>());
   // Run ids the server says belong to another key/account; the next resume forks them.
@@ -78,6 +81,11 @@ export function useReviewRun() {
       await new Promise(resolve => setTimeout(resolve, Math.min(1500 * 2 ** failures, 15000)));
     }
   }, [publish]);
+  const restore = useCallback((snapshot: RunCheckpoint) => {
+    // A restored run comes from a saved copy, so server-backed views may load it now.
+    publish(snapshot, true); setRestorable(null); setSaved({ id: snapshot.id, revision: snapshot.revision });
+    if (snapshot.background) { setBusy(active(snapshot)); void watch(snapshot.id); }
+  }, [publish, watch]);
   useEffect(() => {
     mounted.current = true;
     const observer = watching;
@@ -90,7 +98,11 @@ export function useReviewRun() {
         const data = response.ok ? await response.json() : null;
         if (data?.run?.snapshot && (!local || data.run.snapshot.revision >= local.revision)) local = data.run.snapshot;
       } catch { /* The local checkpoint still shows saved results offline. */ }
-      if (mounted.current && local) setRestorable(local);
+      if (!mounted.current || !local) return;
+      // "Open live controls" links here for a review still running on the server:
+      // attach to it directly instead of asking to restore it.
+      if (id && local.id === id && active(local)) restore(local);
+      else setRestorable(local);
     }).catch(() => {});
     return () => {
       mounted.current = false;
@@ -98,7 +110,7 @@ export function useReviewRun() {
       // snapshot (with reserved charges) still flows through onChange to persist.
       controller.current?.abort(); observer.current++;
     };
-  }, []);
+  }, [restore]);
   // A browser run lives in this tab. Leaving the page (reload, close, or an in-app
   // link) aborts it, so ask first. Background runs continue on the server.
   const browserRunActive = busy && !run?.background;
@@ -117,11 +129,13 @@ export function useReviewRun() {
     document.addEventListener("click", onClick, true);
     return () => { window.removeEventListener("beforeunload", beforeUnload); document.removeEventListener("click", onClick, true); };
   }, [browserRunActive]);
-  const restore = useCallback((snapshot: RunCheckpoint) => {
-    // A restored run comes from a saved copy, so server-backed views may load it now.
-    publish(snapshot, true); setRestorable(null); setSaved({ id: snapshot.id, revision: snapshot.revision });
-    if (snapshot.background) { setBusy(active(snapshot)); void watch(snapshot.id); }
-  }, [publish, watch]);
+  const requestStop = useCallback(async (id: string) => {
+    try {
+      const response = await fetch(`/api/runs/${encodeURIComponent(id)}/stop`, { method: "POST", headers: jsonHeaders(), signal: AbortSignal.timeout(15000) });
+      if (!response.ok) throw new Error("Stop could not be confirmed. Reconnect and try again; the spending limit still applies.");
+    } catch (error) { if (mounted.current) setSaveError(error instanceof Error ? error.message : "Unable to stop review"); }
+    void watch(id);
+  }, [watch]);
   const start = useCallback(async (options: StartOptions) => {
     if (controller.current || starting.current || (current.current && active(current.current))) return;
     starting.current = true;
@@ -131,6 +145,7 @@ export function useReviewRun() {
       if (options.background || current.current?.background && sameReviewInput(current.current, options)) {
         const previous = current.current && sameReviewInput(current.current, options) ? current.current : null;
         const id = previous?.id ?? `run_${crypto.randomUUID()}`;
+        pendingStart.current = { stop: false };
         const response = await fetch("/api/reviews", { method: "POST", headers: jsonHeaders(), signal: AbortSignal.timeout(55000),
           body: JSON.stringify({ submissionId: crypto.randomUUID(), apiKey: options.apiKey, review: {
             id, content: options.content, prompt: options.prompt, context: options.context, reasoningEffort: options.reasoningEffort,
@@ -142,11 +157,15 @@ export function useReviewRun() {
             projectKey: previous?.background ? previous.projectKey : options.projectKey ?? "default",
             baselineRunId: previous?.background ? previous.baselineRunId : options.baselineRunId,
           } }) });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error ?? `Unable to start review (${response.status})`);
+        // Gateways answer timeouts and crashes with HTML; never let that mask the status.
+        const data = await response.json().catch(() => null) as { id?: string; snapshot?: RunCheckpoint; error?: string } | null;
+        if (!response.ok || !data?.id) throw new Error(data?.error ?? `Unable to start review (${response.status}). Check History before starting again; it may already be queued.`);
+        const stopRequested = pendingStart.current?.stop ?? false;
+        pendingStart.current = null;
         if (data.snapshot) publish(data.snapshot);
         window.history.replaceState(null, "", `/?resume=${encodeURIComponent(data.id)}`);
-        void watch(data.id);
+        if (stopRequested) await requestStop(data.id);
+        else void watch(data.id);
       } else {
         const abort = new AbortController(); controller.current = abort;
         // Continue a run saved under another key as a new saved run: same answers and
@@ -163,18 +182,22 @@ export function useReviewRun() {
         if (token === generation.current) setBusy(false);
       }
     } catch (error) {
-      if (mounted.current) { setSaveError(error instanceof Error ? error.message : "Unable to start review"); setBusy(false); }
-    } finally { starting.current = false; if (token === generation.current) controller.current = null; }
-  }, [persist, publish, watch]);
+      const message = error instanceof Error && error.name === "TimeoutError"
+        ? "Starting the review timed out. Check History before starting again; it may already be queued."
+        : error instanceof Error ? error.message : "Unable to start review";
+      if (mounted.current) { setSaveError(message); setBusy(false); }
+    } finally { starting.current = false; pendingStart.current = null; if (token === generation.current) controller.current = null; }
+  }, [persist, publish, requestStop, watch]);
   const stop = useCallback(async () => {
+    if (pendingStart.current) {
+      pendingStart.current.stop = true;
+      setSaveError("Stopping as soon as the server confirms the review…");
+      return;
+    }
     const snapshot = current.current;
     if (!snapshot?.background) { controller.current?.abort(); return; }
-    try {
-      const response = await fetch(`/api/runs/${encodeURIComponent(snapshot.id)}/stop`, { method: "POST", headers: jsonHeaders(), signal: AbortSignal.timeout(15000) });
-      if (!response.ok) throw new Error("Stop could not be confirmed. Reconnect and try again; the spending limit still applies.");
-      void watch(snapshot.id);
-    } catch (error) { setSaveError(error instanceof Error ? error.message : "Unable to stop review"); }
-  }, [watch]);
+    await requestStop(snapshot.id);
+  }, [requestStop]);
   const savedRevision = run && saved?.id === run.id ? saved.revision : -1;
   return { run, busy, restorable, saveError, savedRevision, start, restore, stop, dismissRestore: () => setRestorable(null),
     retrySave: () => { if (current.current?.background) void watch(current.current.id); else if (current.current) persist(current.current); } };

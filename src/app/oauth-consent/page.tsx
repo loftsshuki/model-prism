@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { OAuthConsent, Show } from "@clerk/nextjs";
+import { OAuthConsent, RedirectToSignIn, Show } from "@clerk/nextjs";
 
 export const metadata: Metadata = {
   title: "Authorize Model Prism",
@@ -21,6 +21,11 @@ export default function OAuthConsentPage() {
             },
           }}
         />
+      </Show>
+      {/* Signed-out visitors used to get a blank page and the agent's authorization stalled.
+          Clerk returns them here, with the original authorization request, after sign-in. */}
+      <Show when="signed-out">
+        <RedirectToSignIn />
       </Show>
     </main>
   );

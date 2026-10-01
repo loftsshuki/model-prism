@@ -14,11 +14,34 @@ export async function signedInOwner(): Promise<string | null> {
   return userId ? accountOwner(userId) : null;
 }
 
+/** Comma/space separated OAuth client ids allowed to call /api/mcp; empty means any client the user consents to. */
+export function allowedOAuthClients(env: Record<string, string | undefined> = process.env): Set<string> | null {
+  const ids = (env.MODEL_PRISM_MCP_ALLOWED_CLIENT_IDS ?? "").split(/[\s,]+/).filter(Boolean);
+  return ids.length ? new Set(ids) : null;
+}
+export function oauthClientAllowed(clientId: string | null | undefined, env: Record<string, string | undefined> = process.env) {
+  const allowed = allowedOAuthClients(env);
+  return !allowed || (!!clientId && allowed.has(clientId));
+}
+const seenOAuthClients = new Set<string>();
+let warnedOpenOAuth = false;
+
 export async function oauthOwner(): Promise<string | null> {
   if (!process.env.CLERK_SECRET_KEY || !process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) return null;
   const { auth } = await import("@clerk/nextjs/server");
-  const { userId } = await auth({ acceptsToken: "oauth_token" });
-  return userId ? accountOwner(userId) : null;
+  const { userId, clientId } = await auth({ acceptsToken: "oauth_token" });
+  if (!userId) return null;
+  // Dynamic client registration lets any app obtain a token once a user consents.
+  // An allowlist pins MCP access to known agents (e.g. ChatGPT, Claude).
+  if (!oauthClientAllowed(clientId)) {
+    console.warn(`[mcp] rejected OAuth client ${clientId ?? "(none)"}: not in MODEL_PRISM_MCP_ALLOWED_CLIENT_IDS`);
+    return null;
+  }
+  if (!allowedOAuthClients()) {
+    if (!warnedOpenOAuth) { warnedOpenOAuth = true; console.warn("[mcp] MODEL_PRISM_MCP_ALLOWED_CLIENT_IDS is not set; any OAuth client a user authorizes can call /api/mcp."); }
+    if (clientId && !seenOAuthClients.has(clientId) && seenOAuthClients.size < 1000) { seenOAuthClients.add(clientId); console.info(`[mcp] OAuth client in use: ${clientId}`); }
+  }
+  return accountOwner(userId);
 }
 
 export async function requestOwner(req: NextRequest): Promise<string | null> {

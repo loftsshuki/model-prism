@@ -11,7 +11,19 @@ The MCP transport is authentication-required from the first GET/POST request. Un
 https://model-prism.vercel.app/.well-known/oauth-protected-resource
 ```
 
-Model Prism also retains the path-specific metadata alias at `/.well-known/oauth-protected-resource/mcp`. Both documents identify the Clerk issuer at `https://model-prism.vercel.app/__clerk`, advertise the required scopes, and declare header-based bearer tokens. This matches ChatGPT's current OAuth discovery flow while preserving the path-aware MCP metadata form.
+Model Prism also serves the same document at the RFC 9728 path-aware URL for the `/api/mcp` resource (`/.well-known/oauth-protected-resource/api/mcp`) and at the older `/.well-known/oauth-protected-resource/mcp` alias, so clients that skip the challenge and derive the URL still find it. All three identify the authorization server, advertise the required scopes, and declare header-based bearer tokens. This matches ChatGPT's current OAuth discovery flow while preserving the path-aware MCP metadata form.
+
+The authorization server is `https://<deployment>/__clerk` for a production (`pk_live_`) Clerk key, where the `/__clerk` Frontend API proxy runs. With a development (`pk_test_`) key the proxy is off, so the metadata names the Clerk Frontend API host encoded in the publishable key instead. `MODEL_PRISM_OAUTH_AUTHORIZATION_SERVER` overrides both.
+
+### Restricting which OAuth clients may call MCP
+
+Any client a user authorizes in Clerk can obtain a token for `/api/mcp`. To pin access to known agents, set a comma-separated allowlist of Clerk OAuth client ids:
+
+```env
+MODEL_PRISM_MCP_ALLOWED_CLIENT_IDS=<chatgpt-client-id>,<claude-client-id>
+```
+
+Tokens from any other client then receive the normal `401` challenge. While the variable is unset, all consented clients are accepted and the server logs each client id the first time it is seen (`[mcp] OAuth client in use: …`), which is the easiest way to collect the ids before turning the allowlist on.
 
 ## Endpoint
 
@@ -129,6 +141,15 @@ In Clerk Dashboard:
 5. For the tightest posture, use pre-registered-client admission and allow ChatGPT's production CIMD client.
 
 Do not enable Dynamic Client Registration unless another client actually requires it.
+
+## Account deletion and bans (Clerk webhook)
+
+Review Fabric service tokens, the stored MCP OpenRouter credential, and background reviews keep working without a Clerk session. To cut them off when an account is deleted, banned, or locked:
+
+1. In Clerk Dashboard → **Webhooks**, add an endpoint `https://model-prism.vercel.app/api/webhooks/clerk` subscribed to `user.deleted` and `user.updated`.
+2. Copy its signing secret into the deployment as `CLERK_WEBHOOK_SIGNING_SECRET`.
+
+On those events Model Prism revokes every service token for the account, deletes its stored MCP provider credential, and stops its active background reviews. Saved review history is kept. Without the secret the endpoint answers `503` and does nothing.
 
 ## ChatGPT connection
 
@@ -283,7 +304,8 @@ changes materially, start a new review rather than reusing the old receipt.
 
 ## Security invariants
 
-- MCP requires Clerk OAuth.
+- MCP requires Clerk OAuth; `MODEL_PRISM_MCP_ALLOWED_CLIENT_IDS` can restrict which OAuth clients are accepted.
+- Deleting, banning, or locking a Clerk user revokes service tokens and the MCP credential and stops running reviews (requires the Clerk webhook).
 - OAuth metadata is public; review data is not.
 - Provider credentials never travel through MCP.
 - Provider credentials are encrypted at rest and revocable.

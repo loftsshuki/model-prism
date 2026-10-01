@@ -265,6 +265,16 @@ export async function stopBackgroundReview(runId: string, owner: string) {
     await writeJob(client, job);
   });
 }
+/** Stop every active background review an account owns. Returns the run ids asked to stop. */
+export async function stopAllBackgroundReviews(owner: string) {
+  await initBackgroundDb();
+  const sql = neon(process.env.DATABASE_URL!);
+  const rows = await sql`SELECT run_id FROM review_jobs WHERE owner_key=${owner} AND state IN ('queued','running','stopping')`;
+  const runIds = rows.map(row => String(row.run_id));
+  // Stopped jobs drop their stored provider key (writeJob); "stopping" ones drop it when the in-flight request ends.
+  for (const runId of runIds) await stopBackgroundReview(runId, owner);
+  return runIds;
+}
 export async function setJobState(runId: string, execution: number, state: JobState, error?: string) {
   return changeJob(runId, execution, async job => {
     if (job.cancelRequested && state === "complete") return;

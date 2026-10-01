@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { BudgetExceededError } from "../run-budget";
 import { ReviewConflict } from "./background-store";
+import { ProviderError } from "../openrouter-client";
 
 export function privateJson(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { "Cache-Control": "private, no-store" } });
@@ -27,6 +28,12 @@ export function publicErrorMessage(error: unknown) {
   if (error instanceof ReviewConflict || error instanceof BudgetExceededError) return error.message;
   console.error("[review] unexpected tool error:", error instanceof Error ? error.message : error);
   return "Model Prism could not complete this request right now. Saved reviews and spending are retained; try again shortly.";
+}
+/** For routes that call a provider with the caller's own key: provider and budget errors are the caller's to see, internals are not. */
+export function providerErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof ProviderError || error instanceof BudgetExceededError) return error.message;
+  console.error("[provider route] unexpected error:", error instanceof Error ? error.message : error);
+  return fallback;
 }
 export async function limitedJson(req: Request, maxBytes = 4_000_000): Promise<unknown> {
   if (Number(req.headers.get("content-length")) > maxBytes) throw new Error("Body exceeds the request limit");

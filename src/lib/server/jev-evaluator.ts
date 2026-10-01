@@ -32,8 +32,21 @@ export function jevEnabled(env: NodeJS.ProcessEnv = process.env) {
   return !["0", "false", "off", "no"].includes(raw);
 }
 
-function resolveGatewayToken(explicit?: string) {
-  return explicit || process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN || "";
+/**
+ * On Vercel the OIDC token arrives per request (not as an env var), so reading
+ * VERCEL_OIDC_TOKEN alone failed in production and every gate silently fell back.
+ */
+export async function resolveGatewayToken(explicit?: string, env: NodeJS.ProcessEnv = process.env) {
+  if (explicit) return explicit;
+  if (env.AI_GATEWAY_API_KEY) return env.AI_GATEWAY_API_KEY;
+  if (env.VERCEL || env.VERCEL_OIDC_TOKEN) {
+    try {
+      const { getVercelOidcToken } = await import("@vercel/oidc");
+      const token = await getVercelOidcToken();
+      if (token) return token;
+    } catch { /* fall back to the env token below */ }
+  }
+  return env.VERCEL_OIDC_TOKEN || "";
 }
 
 export async function evaluateWithJev(input: {
@@ -45,7 +58,7 @@ export async function evaluateWithJev(input: {
 }): Promise<JevEvaluationResult> {
   if (!jevEnabled()) throw new Error("Jev is disabled by MODEL_PRISM_JEV_ENABLED");
 
-  const token = resolveGatewayToken(input.token);
+  const token = await resolveGatewayToken(input.token);
   if (!token) throw new Error("Jev authentication unavailable; use Vercel OIDC or set AI_GATEWAY_API_KEY");
 
   const started = Date.now();

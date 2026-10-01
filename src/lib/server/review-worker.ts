@@ -3,8 +3,9 @@ import { fanOut } from "../fan-out";
 import { synthesizeViaOpenRouter } from "../synthesis";
 import { fetchModelCatalog } from "../model-catalog";
 import { escalationReasons } from "../review-policy";
+import { mergeUsage } from "../run-checkpoint";
 import { decryptCredential } from "./credentials";
-import { evaluatePostSynthesisEscalation, evaluatePreReviewDepth } from "./review-decision-gates";
+import { evaluatePostSynthesisEscalation, evaluatePreReviewDepth, gateUsage } from "./review-decision-gates";
 import { beginOperation, changeJob, claimWorkflow, finishOperation, jobIsActive, loadWorkerJob, PersistentRunBudget, renewOperationLease, setJobState, type WorkerJob } from "./background-store";
 import { recordFindings } from "./finding-store";
 
@@ -19,6 +20,8 @@ export async function prepareReview(runId: string, execution: number, workflowId
       await changeJob(runId, execution, async active => {
         if (decision.record && !active.snapshot.decisionGates?.some(record => record.key === decision.record!.key && record.execution === execution)) {
           active.snapshot.decisionGates = [...(active.snapshot.decisionGates ?? []), decision.record!].slice(-200);
+          const usage = gateUsage(decision.record);
+          if (usage) active.snapshot.usage = mergeUsage([...active.snapshot.usage, usage]);
         }
         if (decision.initialIds.length) active.snapshot.adaptive!.initialIds = decision.initialIds;
         if (decision.record && ["expanded", "reduced"].includes(decision.record.action)) {
@@ -162,6 +165,8 @@ export async function planEscalation(runId: string, execution: number) {
   await changeJob(runId, execution, async active => {
     if (decision.record && !active.snapshot.decisionGates?.some(record => record.key === decision.record!.key && record.execution === execution)) {
       active.snapshot.decisionGates = [...(active.snapshot.decisionGates ?? []), decision.record!].slice(-200);
+      const usage = gateUsage(decision.record);
+      if (usage) active.snapshot.usage = mergeUsage([...active.snapshot.usage, usage]);
     }
     const jevReason = decision.record?.action === "expanded"
       ? [`Jev ${decision.record.mode} escalation gate requested additional independent review`]

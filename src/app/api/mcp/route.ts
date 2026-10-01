@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { publicErrorMessage } from "@/lib/server/http";
 import { oauthOwner } from "@/lib/api-auth";
+import { MCP_OAUTH_SCOPES } from "@/lib/oauth-resource";
 import { MCP_TOOLS, invokeMcpTool } from "@/lib/mcp/review-tools";
 
 export const runtime = "nodejs";
@@ -39,7 +40,7 @@ function authChallenge(req: NextRequest, id: RpcId = null) {
     status: 401,
     headers: {
       "Cache-Control": "no-store",
-      "WWW-Authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource", scope="openid profile email offline_access"`,
+      "WWW-Authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource", scope="${MCP_OAUTH_SCOPES.join(" ")}"`,
       "MCP-Protocol-Version": PROTOCOL_VERSION,
     },
   });

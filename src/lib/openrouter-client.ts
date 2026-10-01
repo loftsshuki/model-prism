@@ -51,6 +51,17 @@ export interface CompletionOptions {
 /** Wall-clock limit for one provider request. Keep below the worker's request-lease renewal horizon. */
 export const PROVIDER_TIMEOUT_MS = 600_000;
 
+/**
+ * The server-side provider deadline. A background step runs inside one Vercel
+ * function, whose plan maximum (300s on Hobby) can be shorter than 10 minutes; a
+ * request outliving its function is killed without a clean "timed out" result.
+ * Set MODEL_PRISM_PROVIDER_TIMEOUT_MS below the plan's function limit (30s–600s).
+ */
+export function providerTimeoutMs(env: Record<string, string | undefined> | undefined = typeof process === "undefined" ? undefined : process.env) {
+  const configured = Number(env?.MODEL_PRISM_PROVIDER_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0 ? Math.min(PROVIDER_TIMEOUT_MS, Math.max(30_000, Math.round(configured))) : PROVIDER_TIMEOUT_MS;
+}
+
 export function supportedEffort(model: ModelInfo, effort = "medium") {
   const supported = model.reasoning?.supported_efforts;
   if (!model.reasoning) return undefined;
@@ -158,7 +169,7 @@ export async function requestCompletion(opts: CompletionOptions): Promise<Comple
       await opts.budget?.settle(requestId, usage);
       settled = true; opts.onUsage?.(usage);
     };
-    const timeoutMs = opts.timeoutMs ?? PROVIDER_TIMEOUT_MS;
+    const timeoutMs = opts.timeoutMs ?? providerTimeoutMs();
     const timeout = AbortSignal.timeout(timeoutMs);
     const signal = AbortSignal.any([...(opts.signal ? [opts.signal] : []), timeout]);
     try {

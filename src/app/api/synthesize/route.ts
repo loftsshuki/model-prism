@@ -5,6 +5,7 @@ import { fetchModelCatalog, SYNTHESIS_IDS } from "@/lib/model-catalog";
 import { RunBudget } from "@/lib/run-budget";
 import { getRun, saveSynthesis, updateRunCost } from "@/lib/db";
 import { requireAdminToken, requestOwner, sameOrigin } from "@/lib/api-auth";
+import { providerErrorMessage } from "@/lib/server/http";
 
 export const maxDuration = 60;
 const Input = z.object({ runId: z.string().optional(), content: z.string(), analysisPrompt: z.string(), openrouterKey: z.string().min(1), synthesisModel: z.enum(["sonnet", "opus", "fable"]).default("fable"), maxCost: z.number().positive().default(2), responses: z.array(z.object({ model: z.string(), modelName: z.string(), family: z.string(), response: z.string().min(1) })).min(2).max(100) });
@@ -25,5 +26,5 @@ export async function POST(req: NextRequest) {
     const result = await synthesizeViaOpenRouter({ ...input, modelId, signal, budget: new RunBudget(input.maxCost) });
     if (input.runId) { await saveSynthesis(input.runId, JSON.stringify(result), modelId); await updateRunCost(input.runId, 0); }
     return NextResponse.json({ synthesis: result, model: modelId, usage: result.usage });
-  } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Synthesis failed" }, { status: signal.aborted ? 504 : 502 }); }
+  } catch (error) { return NextResponse.json({ error: providerErrorMessage(error, "Synthesis failed. Try again shortly.") }, { status: signal.aborted ? 504 : 502 }); }
 }

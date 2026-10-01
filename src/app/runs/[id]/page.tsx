@@ -146,6 +146,7 @@ export default function RunPage() {
   const router = useRouter();
   const [run, setRun] = useState<SavedRun | null>(null);
   const [status, setStatus] = useState<PlanApprovalStatus>("council-reviewed");
+  const [statusError, setStatusError] = useState<string | null>(null);
   const [copiedFrontmatter, setCopiedFrontmatter] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -224,17 +225,27 @@ export default function RunPage() {
 
   const updateStatus = async (next: PlanApprovalStatus) => {
     if (!run) return;
+    const previous = status;
     setStatus(next);
-    setPlanStatus(run.id, next);
-    await fetch("/api/plan-status", {
-      method: "POST",
-      headers: jsonHeaders(),
-      body: JSON.stringify({
-        runId: run.id,
-        status: next,
-        approvedAt: ["founder-approved", "ready", "executed"].includes(next) ? new Date().toISOString() : null,
-      }),
-    }).catch(() => {});
+    setStatusError(null);
+    try {
+      const response = await fetch("/api/plan-status", {
+        method: "POST",
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          runId: run.id,
+          status: next,
+          approvedAt: ["founder-approved", "ready", "executed"].includes(next) ? new Date().toISOString() : null,
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) throw new Error(`status ${response.status}`);
+      setPlanStatus(run.id, next);
+    } catch {
+      // The server copy wins on the next load, so showing an unsaved status would silently revert later.
+      setStatus(previous);
+      setStatusError(`Could not save "${PLAN_APPROVAL_STATUSES.find(item => item.id === next)?.label ?? next}". The status was not changed; try again.`);
+    }
   };
 
   const copyFrontmatter = async () => {
@@ -338,6 +349,7 @@ export default function RunPage() {
               </button>
             ))}
           </div>
+          {statusError && <p role="alert" className="mt-3 border border-gold p-3 text-sm">{statusError}</p>}
         </div>
 
         {/* Run Info */}

@@ -72,6 +72,13 @@ CRON_SECRET=<a separate random secret>
 MODEL_PRISM_JEV_ENABLED=true
 # Optional for local/non-Vercel execution. Vercel deployments use project OIDC automatically.
 AI_GATEWAY_API_KEY=
+# Background reviews: per-request provider deadline in ms (30000-600000, default 600000).
+# Keep it below your plan's function limit; on Vercel Hobby (300s) use e.g. 270000.
+MODEL_PRISM_PROVIDER_TIMEOUT_MS=
+# MCP: optional OAuth client allowlist, and the Clerk webhook secret that revokes access
+# for deleted or banned users. See docs/MCP_INTEGRATION.md.
+MODEL_PRISM_MCP_ALLOWED_CLIENT_IDS=
+CLERK_WEBHOOK_SIGNING_SECRET=
 ```
 
 Optional API protection for history/save routes:
@@ -82,7 +89,7 @@ MODEL_PRISM_ADMIN_TOKEN=choose-a-long-random-token
 
 When `MODEL_PRISM_ADMIN_TOKEN` is set, users must enter the same value in Settings so requests include `x-model-prism-token`.
 
-Background reviews can use TypeSafe AI's Jev through Vercel AI Gateway. Each review independently chooses **Off**, **Shadow**, **Assist**, or **Enforce** for pre-review depth and post-synthesis escalation. Shadow records only. Assist may add scrutiny but never removes deterministic safeguards. Enforce may reduce adaptive work only when Jev is confidently negative; explicit high-risk reviews, low reviewer quorum, high-impact findings, and unverified evidence remain deterministic hard safeguards. Jev requests use Zero Data Retention and are restricted to the TypeSafe AI provider.
+Background reviews can use TypeSafe AI's Jev through Vercel AI Gateway. Each review independently chooses **Off**, **Shadow**, **Assist**, or **Enforce** for pre-review depth and post-synthesis escalation. Shadow records only. Assist may add scrutiny but never removes deterministic safeguards. Enforce may reduce adaptive work only when Jev is confidently negative; explicit high-risk reviews, low reviewer quorum, high-impact findings, and unverified evidence remain deterministic hard safeguards. Jev requests use Zero Data Retention and are restricted to the TypeSafe AI provider. Each gate's charge is recorded in the review's usage, so it counts toward the run's cost and spending limit.
 
 ## Scripts
 

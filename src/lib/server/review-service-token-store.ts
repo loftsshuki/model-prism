@@ -116,6 +116,16 @@ export async function revokeReviewServiceToken(owner: string, tokenId: string) {
   if (!rows.length) throw new ReviewConflict("Service token not found", 404);
 }
 
+/** Revoke every live token an account holds (account deleted or banned). Returns how many were revoked. */
+export async function revokeAllReviewServiceTokens(owner: string) {
+  checkOwner(owner);
+  await ensureTable();
+  const sql = client();
+  const rows = await sql`UPDATE review_service_tokens SET revoked_at=NOW()
+    WHERE owner_key=${owner} AND revoked_at IS NULL RETURNING token_id`;
+  return rows.length;
+}
+
 export async function authenticateReviewServiceToken(token: string) {
   if (!tokenPattern.test(token)) return null;
   await ensureTable();
