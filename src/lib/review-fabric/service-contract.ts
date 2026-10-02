@@ -22,7 +22,7 @@ export const ReviewFabricRequestSchema = z.object({
   artifactId: z.string().regex(/^review-artifact:[a-f0-9]{64}$/),
   artifactContentSha256: Sha256Schema,
   provider: z.literal("model-prism"),
-  projectId: z.string().min(1).max(200),
+  projectId: z.string().trim().min(1).max(200),
   repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
   artifactType: ReviewFabricArtifactTypeSchema,
   criticality: ReviewFabricCriticalitySchema,
@@ -65,6 +65,16 @@ export const ReviewFabricSubmissionSchema = z.object({
   }).strict(),
   sources: z.array(SourceInputSchema).max(40).default([]),
 }).strict().superRefine((value, ctx) => {
+  // Mirror the background review limits so an oversized submission is a 400 here,
+  // not a downstream failure after key checks.
+  value.sources.forEach((source, index) => {
+    if (source.startLine !== undefined && source.text.split("\n").length > 100_000) {
+      ctx.addIssue({ code: "custom", path: ["sources", index, "text"], message: "A source with startLine may have at most 100,000 lines" });
+    }
+  });
+  if (value.sources.reduce((sum, source) => sum + source.text.length, 0) > 1_500_000) {
+    ctx.addIssue({ code: "custom", path: ["sources"], message: "Attached source files exceed the 1,500,000-character review limit" });
+  }
   const artifactHash = sha256(value.artifact.content);
   if (artifactHash !== value.request.artifactContentSha256) {
     ctx.addIssue({
@@ -120,10 +130,11 @@ export function normalizeFindings(synthesis: unknown) {
     if (!finding || typeof finding !== "object") return [];
     const severity = String(finding.severity ?? "");
     if (!["critical", "high", "medium", "low"].includes(severity)) return [];
-    const title = String(finding.title ?? "").trim();
+    // A finding still counts by severity when its text is incomplete; dropping it
+    // could turn a critical issue into "no material objection".
     const summary = String(finding.recommendation ?? "").trim();
-    if (!title || !summary) return [];
-    return [{ severity: severity as "critical" | "high" | "medium" | "low", title, summary }];
+    const title = String(finding.title ?? "").trim() || summary.slice(0, 120) || "Untitled finding";
+    return [{ severity: severity as "critical" | "high" | "medium" | "low", title, summary: summary || title }];
   });
   const findingCounts = {
     critical: valid.filter(finding => finding.severity === "critical").length,
@@ -139,6 +150,9 @@ export function reviewDisposition(state: string, synthesis: unknown) {
   if (state === "error") return "failed" as const;
   if (state === "stopped") return "stopped" as const;
   if (state !== "complete" || !synthesis || typeof synthesis !== "object") return "inconclusive" as const;
+  // Without a structured findings list the verdict cannot be computed; the master
+  // document may still describe critical problems. Never report "no objection" then.
+  if (!Array.isArray((synthesis as { findings?: unknown }).findings)) return "inconclusive" as const;
   const { findingCounts } = normalizeFindings(synthesis);
   if (findingCounts.critical + findingCounts.high > 0) return "material_revision_required" as const;
   const disagreements = Array.isArray((synthesis as { disagreements?: unknown }).disagreements)

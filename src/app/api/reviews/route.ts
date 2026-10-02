@@ -1,5 +1,4 @@
 import { NextRequest } from "next/server";
-import { start } from "workflow/api";
 import { z } from "zod";
 import { requireAdminToken, requestOwner, sameOrigin } from "@/lib/api-auth";
 import { BackgroundReviewSchema } from "@/lib/review-policy";
@@ -7,7 +6,7 @@ import { fetchModelCatalog } from "@/lib/model-catalog";
 import { getRun } from "@/lib/db";
 import { startBackgroundReview } from "@/lib/server/background-store";
 import { limitedJson, privateJson, reviewError } from "@/lib/server/http";
-import { backgroundReview } from "@/workflows/review";
+import { ensureDispatched } from "@/lib/server/dispatch";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -26,15 +25,11 @@ export async function POST(req: NextRequest) {
     if (!keyCheck.ok) return privateJson({ error: "OpenRouter could not validate this key. Check its access and try again." }, keyCheck.status === 401 || keyCheck.status === 403 ? 401 : 503);
     const catalog = await fetchModelCatalog();
     const job = await startBackgroundReview(parsed.data.review, owner, parsed.data.apiKey, catalog, parsed.data.submissionId);
-    if (job.started) {
-      try { await start(backgroundReview, [job.id, job.execution]); }
-      catch {
-        // A dispatch failure can be ambiguous. Leave the job queued so a retry
-        // cannot launch another paid execution. Recovery retains any reservation.
-        return privateJson({ id: job.id, queued: true, warning: "Dispatch could not be confirmed. The review is saved; check its status before retrying." }, 202);
-      }
-    }
+    // Also re-dispatches a saved job whose earlier dispatch failed; claimWorkflow
+    // still guarantees a single paid execution.
+    const dispatch = await ensureDispatched(job);
+    if (dispatch.warning) return privateJson({ id: job.id, queued: true, warning: dispatch.warning }, 202);
     const run = await getRun(job.id, owner);
-    return privateJson({ id: job.id, started: job.started, snapshot: run?.snapshot }, 202);
+    return privateJson({ id: job.id, started: job.started || dispatch.dispatched, snapshot: run?.snapshot }, 202);
   } catch (error) { return reviewError(error); }
 }

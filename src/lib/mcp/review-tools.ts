@@ -1,14 +1,14 @@
-import { randomUUID } from "node:crypto";
-import { start } from "workflow/api";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { listRuns, getRun } from "../db";
 import { COUNCIL_IDS, SYNTHESIS_IDS, fetchModelCatalog } from "../model-catalog";
 import { DEFAULT_TEMPLATES } from "../prompts";
 import { BackgroundReviewSchema } from "../review-policy";
 import type { RunCheckpoint } from "../run-checkpoint";
-import { startBackgroundReview, stopBackgroundReview } from "../server/background-store";
+import { findSubmission, recoverStalledReview, ReviewConflict, startBackgroundReview, stopBackgroundReview } from "../server/background-store";
+import { ensureDispatched } from "../server/dispatch";
+import { requiredRunBudget, SYNTHESIS_MIN_TOKENS } from "../run-budget";
 import { loadMcpProviderCredential } from "../server/mcp-credential-store";
-import { backgroundReview } from "../../workflows/review";
 import type { ModelInfo } from "../types";
 
 const ArtifactTypeSchema = z.enum([
@@ -27,7 +27,7 @@ const SourceInputSchema = z.object({
   repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/).optional(),
   commit: z.string().regex(/^[a-f0-9]{40}$/i).optional(),
   startLine: z.number().int().positive().optional(),
-}).strict();
+}).strict().refine(source => source.startLine === undefined || source.text.split("\n").length <= 100_000, "A source with startLine may have at most 100,000 lines");
 
 const ReviewInputSchema = z.object({
   title: z.string().trim().min(1).max(300),
@@ -39,7 +39,7 @@ const ReviewInputSchema = z.object({
   sources: z.array(SourceInputSchema).max(40).default([]),
   maxCost: z.number().finite().min(0.25).max(25).optional(),
   additionalInstructions: z.string().max(20_000).default(""),
-}).strict();
+}).strict().refine(input => input.sources.reduce((sum, source) => sum + source.text.length, 0) <= 1_500_000, "Attached source files exceed the 1,500,000-character review limit");
 
 const GetReviewSchema = z.object({
   reviewId: z.string().regex(/^run_[a-zA-Z0-9_-]+$/).max(100),
@@ -93,12 +93,13 @@ function chooseModels(catalog: ModelInfo[], criticality: Criticality) {
   return ids;
 }
 
+/** Fable 5.1 by default; fall back to Opus, then Sonnet, so one unavailable model doesn't fail every agent review. */
 function chooseSynthesis(catalog: ModelInfo[]) {
-  const model = catalog.find(item => item.id === SYNTHESIS_IDS.fable);
-  if (!model || model.toolCallApi === "responses" || !model.supportedParameters?.includes("tools")) {
-    throw new Error("Claude Fable 5.1 is unavailable for Model Prism synthesis");
+  for (const id of [SYNTHESIS_IDS.fable, SYNTHESIS_IDS.opus, SYNTHESIS_IDS.sonnet]) {
+    const model = catalog.find(item => item.id === id);
+    if (model && model.toolCallApi !== "responses" && model.supportedParameters?.includes("tools")) return model;
   }
-  return model.id;
+  throw new Error("No tool-capable synthesis model is available in the current catalog");
 }
 
 function budgetFor(criticality: Criticality) {
@@ -145,14 +146,30 @@ type ReviewListRow = {
 
 async function liveProviderKey(owner: string) {
   const apiKey = await loadMcpProviderCredential(owner);
-  if (!apiKey) throw new Error("Agent review access is not enabled. Open Model Prism Settings and enable MCP / agent review access.");
+  if (!apiKey) throw new ReviewConflict("Agent review access is not enabled. Open Model Prism Settings and enable MCP / agent review access.", 403);
   const check = await fetch("https://openrouter.ai/api/v1/key", {
     headers: { Authorization: `Bearer ${apiKey}` },
     signal: AbortSignal.timeout(10000),
     cache: "no-store",
   });
-  if (!check.ok) throw new Error("The saved OpenRouter credential is no longer valid. Reconnect it in Model Prism Settings.");
+  // Only an explicit rejection means the key is bad; an OpenRouter outage or rate limit is transient.
+  if (check.status === 401 || check.status === 403) throw new ReviewConflict("The saved OpenRouter credential is no longer valid. Reconnect it in Model Prism Settings.", 409);
+  if (!check.ok) throw new Error(`OpenRouter could not verify the saved credential (${check.status})`);
   return apiKey;
+}
+
+async function submissionStatus(owner: string, runId: string, extra: { started: boolean; queued?: boolean; warning?: string; roster?: string[]; synthesisModel?: string; maxCost?: number }) {
+  const run = await getRun(runId, owner) as unknown as ReviewRunRecord | null;
+  return {
+    reviewId: runId,
+    state: run?.snapshot?.background?.state ?? "queued",
+    phase: run?.snapshot?.background?.phase ?? "Queued",
+    artifactHashBound: true,
+    ...extra,
+    roster: extra.roster ?? run?.snapshot?.models?.map(model => model.id) ?? [],
+    synthesisModel: extra.synthesisModel ?? run?.snapshot?.synthesisModel,
+    maxCost: extra.maxCost ?? run?.snapshot?.maxCost,
+  };
 }
 
 export interface SubmitReviewOptions {
@@ -163,12 +180,29 @@ export interface SubmitReviewOptions {
 
 export async function submitReview(owner: string, input: unknown, options: SubmitReviewOptions = {}) {
   const parsed = ReviewInputSchema.parse(input);
+  // An identical retry must find its run even if the key check or the catalog would
+  // now fail or differ, so look the submission up before either.
+  const callerHash = createHash("sha256").update(JSON.stringify({ input: parsed, invokedBy: options.invokedBy ?? null, external: options.externalMetadata ?? null })).digest("hex");
+  if (options.submissionId) {
+    const prior = await findSubmission(owner, options.submissionId);
+    if (prior) {
+      if (prior.callerHash && prior.callerHash !== callerHash) throw new ReviewConflict("A submission ID cannot be reused for different input", 409);
+      const dispatch = await ensureDispatched({ id: prior.runId, execution: prior.execution, started: false });
+      return submissionStatus(owner, prior.runId, { started: dispatch.dispatched, ...(dispatch.warning ? { queued: true, warning: dispatch.warning } : {}) });
+    }
+  }
   const apiKey = await liveProviderKey(owner);
   const catalog = await fetchModelCatalog();
   const modelIds = chooseModels(catalog, parsed.criticality);
-  const synthesisModel = chooseSynthesis(catalog);
+  const synthesizer = chooseSynthesis(catalog);
+  const synthesisModel = synthesizer.id;
   const reviewId = `run_${randomUUID()}`;
   const maxCost = parsed.maxCost ?? budgetFor(parsed.criticality);
+  // Refuse a cap that cannot hold even the smallest synthesis on top of the council,
+  // instead of spending on reviewers and failing at synthesis.
+  const reviewers = modelIds.map(id => catalog.find(model => model.id === id)!);
+  const minimum = requiredRunBudget({ reviewers, synthesizer, inputText: parsed.content + parsed.context, maxTokens: 8192, synthesisMaxTokens: SYNTHESIS_MIN_TOKENS });
+  if (minimum.total > maxCost) throw new ReviewConflict(`maxCost $${maxCost.toFixed(2)} cannot cover this review: reviewers and synthesis can reserve up to $${minimum.total.toFixed(2)} at once. Raise maxCost to at least $${(Math.ceil(minimum.total * 4) / 4).toFixed(2)}.`, 400);
   const metadata = JSON.stringify({
     title: parsed.title,
     artifactType: parsed.artifactType,
@@ -197,40 +231,24 @@ export async function submitReview(owner: string, input: unknown, options: Submi
     projectKey: parsed.projectKey,
     sources: sourceDocuments(parsed.sources),
   });
-  const job = await startBackgroundReview(review, owner, apiKey, catalog, options.submissionId ?? randomUUID());
-
-  if (job.started) {
-    try { await start(backgroundReview, [job.id, job.execution]); }
-    catch {
-      return {
-        reviewId: job.id,
-        state: "queued",
-        queued: true,
-        warning: "Dispatch could not be confirmed. The durable review is saved; inspect its status before retrying.",
-        roster: modelIds,
-        synthesisModel,
-        maxCost,
-      };
-    }
+  const job = await startBackgroundReview(review, owner, apiKey, catalog, options.submissionId ?? randomUUID(), callerHash);
+  const dispatch = await ensureDispatched(job);
+  if (dispatch.warning) {
+    return { reviewId: job.id, state: "queued", phase: "Queued", started: false, queued: true, warning: dispatch.warning, roster: modelIds, synthesisModel, maxCost, artifactHashBound: true };
   }
-
-  const run = await getRun(job.id, owner) as unknown as ReviewRunRecord | null;
-  return {
-    reviewId: job.id,
-    state: run?.snapshot?.background?.state ?? "queued",
-    phase: run?.snapshot?.background?.phase ?? "Queued",
-    started: job.started,
-    roster: modelIds,
-    synthesisModel,
-    maxCost,
-    artifactHashBound: true,
-  };
+  return submissionStatus(owner, job.id, { started: job.started || dispatch.dispatched, roster: modelIds, synthesisModel, maxCost });
 }
 
 export async function getReviewResult(owner: string, input: unknown) {
   const parsed = GetReviewSchema.parse(input);
-  const run = await getRun(parsed.reviewId, owner) as unknown as ReviewRunRecord | null;
-  if (!run) throw new Error("Review not found");
+  let run = await getRun(parsed.reviewId, owner) as unknown as ReviewRunRecord | null;
+  if (!run) throw new ReviewConflict("Review not found", 404);
+  // Agents and services poll here instead of the browser route, so stalled or
+  // never-dispatched runs must be recovered here too (not only by the daily cron).
+  if (run.snapshot?.background) {
+    await recoverStalledReview(parsed.reviewId, owner);
+    run = (await getRun(parsed.reviewId, owner) as unknown as ReviewRunRecord | null) ?? run;
+  }
   const snapshot = run.snapshot;
   return {
     reviewId: run.id,

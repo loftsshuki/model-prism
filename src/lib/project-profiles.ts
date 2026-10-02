@@ -23,7 +23,7 @@ export const BUILT_IN_PROJECT_PROFILES: ProjectProfile[] = [
     defaultRunPresetId: "plan-review",
     defaultModelPreset: "diverse",
     defaultSynthesisModel: "fable",
-    defaultMaxCost: 1.5,
+    defaultMaxCost: 4,
     defaultContextPackName: "LuxuryApartments",
   },
   {
@@ -33,7 +33,7 @@ export const BUILT_IN_PROJECT_PROFILES: ProjectProfile[] = [
     defaultRunPresetId: "code-review",
     defaultModelPreset: "diverse",
     defaultSynthesisModel: "fable",
-    defaultMaxCost: 0.75,
+    defaultMaxCost: 4,
     defaultContextPackName: "Pi Desktop",
   },
   {
@@ -43,7 +43,7 @@ export const BUILT_IN_PROJECT_PROFILES: ProjectProfile[] = [
     defaultRunPresetId: "architecture-review",
     defaultModelPreset: "frontier",
     defaultSynthesisModel: "fable",
-    defaultMaxCost: 1.25,
+    defaultMaxCost: 7,
     defaultContextPackName: "Model Prism",
   },
 ];

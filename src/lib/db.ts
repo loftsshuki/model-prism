@@ -191,7 +191,9 @@ export async function saveRunCheckpoint(snapshot: RunCheckpoint, owner: string) 
   await initDb();
   const sql = getClient();
   const existing = await sql`SELECT snapshot, snapshot_revision, owner_key FROM runs WHERE id = ${snapshot.id}`;
-  if (existing.length && existing[0].owner_key !== owner) throw new Error("RUN_CONFLICT");
+  // A different owner usually means the user changed keys mid-run (signed out). Report
+  // it distinctly so the client can continue under a new run id instead of looping on 409.
+  if (existing.length && existing[0].owner_key !== owner) throw new Error("RUN_OWNER_MISMATCH");
   const previous = existing[0]?.snapshot as RunCheckpoint | undefined;
   if (previous?.background) throw new Error("RUN_CONFLICT");
   if (previous && !sameReviewInput(previous, snapshot)) throw new Error("RUN_CONFLICT");
@@ -306,7 +308,7 @@ export async function upsertHookJob(input: {
 }, owner: string | null = null) {
   await initDb();
   const sql = getClient();
-  await sql`
+  const saved = await sql`
     INSERT INTO hook_jobs (id, plan_file, status, run_id, cost, models, error, logs, updated_at, owner_key)
     VALUES (${input.id}, ${input.planFile}, ${input.status}, ${input.runId ?? null}, ${input.cost ?? 0}, ${input.models ? JSON.stringify(input.models) : null}, ${input.error ?? null}, ${input.logs ?? null}, NOW(), ${owner})
     ON CONFLICT (id) DO UPDATE SET
@@ -319,7 +321,10 @@ export async function upsertHookJob(input: {
       logs = EXCLUDED.logs,
       updated_at = NOW()
     WHERE hook_jobs.owner_key = EXCLUDED.owner_key
+    RETURNING id
   `;
+  // No row means the id exists under another owner and nothing was written.
+  return saved.length > 0;
 }
 
 export async function listRuns(owner: string | null = null) {
@@ -328,7 +333,7 @@ export async function listRuns(owner: string | null = null) {
   const sql = getClient();
 
   const runs = await sql`
-    SELECT r.id, r.content, r.prompt, r.total_cost, r.context_metadata, r.created_at, r.snapshot->'background' AS background,
+    SELECT r.id, LEFT(r.content, 300) AS content, LEFT(r.prompt, 300) AS prompt, r.total_cost, r.context_metadata, r.created_at, r.snapshot->'background' AS background,
       CASE WHEN r.snapshot IS NOT NULL THEN jsonb_array_length(r.snapshot->'responses') ELSE COUNT(resp.id)::int END as response_count,
       CASE WHEN r.snapshot IS NOT NULL THEN CASE WHEN r.snapshot->'synthesis' IS NOT NULL THEN 1 ELSE 0 END ELSE (SELECT COUNT(*)::int FROM syntheses s WHERE s.run_id = r.id) END as has_synthesis
     FROM runs r

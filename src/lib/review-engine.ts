@@ -1,6 +1,6 @@
 import { fanOut } from "./fan-out";
 import { synthesizeViaOpenRouter } from "./synthesis";
-import { RunBudget } from "./run-budget";
+import { RunBudget, type RequestBudget } from "./run-budget";
 import { abortError } from "./openrouter-client";
 import { mergeUsage, sameReviewInput, type ReviewInput, type RunCheckpoint } from "./run-checkpoint";
 import type { ModelInfo, ModelUsage } from "./types";
@@ -28,6 +28,19 @@ export async function executeReview(opts: ReviewOptions): Promise<RunCheckpoint>
     sources: opts.sources, projectKey: opts.projectKey, baselineRunId: opts.baselineRunId,
   };
   const budget = new RunBudget(opts.maxCost, run.usage);
+  // Reservations used to live only in memory until a request settled. A reload or
+  // crash mid-request then lost them, and a resume re-ran those models against the
+  // full cap. Record each reservation in the checkpoint before the request is sent;
+  // the settled usage (same requestId) replaces it via mergeUsage.
+  const ledger: RequestBudget = {
+    reserve: (id, ceiling, model) => {
+      budget.reserve(id, ceiling);
+      update({ usage: mergeUsage([...run.usage, { requestId: id, model: model ?? "pending", inputTokens: 0, outputTokens: 0, cost: ceiling, costSource: "reserved" }]) });
+    },
+    settle: (id, record) => budget.settle(id, record),
+    release: (id) => { budget.release(id); update({ usage: run.usage.filter((usage) => usage.requestId !== id) }); },
+    available: () => budget.available(),
+  };
   const update = (change: Partial<RunCheckpoint>, checkpoint = true) => {
     run = { ...run, ...change, revision: run.revision + 1, updatedAt: new Date().toISOString() };
     opts.onChange(run, checkpoint);
@@ -43,7 +56,7 @@ export async function executeReview(opts: ReviewOptions): Promise<RunCheckpoint>
   try {
     if (!opts.secondPass) await fanOut({ models: pending, catalog: opts.catalog, content: run.content, prompt: run.prompt, context: run.context,
       apiKey: opts.apiKey, runId: run.id, maxTokens: opts.maxTokens, reasoningEffort: run.reasoningEffort,
-      signal: opts.signal, isAborted: () => opts.signal.aborted, budget, allowPaidFallback: opts.allowPaidFallback, onUsage,
+      signal: opts.signal, isAborted: () => opts.signal.aborted, budget: ledger, allowPaidFallback: opts.allowPaidFallback, onUsage,
       onUpdate: (id, response) => update({ responses: [...run.responses.filter((item) => (item.requestedModel ?? item.model) !== id), response] }, response.status !== "streaming"),
     });
     if (opts.signal.aborted) throw abortError();
@@ -56,7 +69,7 @@ export async function executeReview(opts: ReviewOptions): Promise<RunCheckpoint>
         analysisPrompt: run.prompt, context: run.context, sources: run.sources,
         responses: successful.map((response) => ({ model: response.model, modelName: response.modelName, family: response.family ?? "unknown", response: response.response! })),
         customSynthesisInstructions: opts.secondPass ? `Audit the first synthesis for unsupported claims, contradictions, and omitted evidence. Produce a corrected master document with traceable findings. First synthesis (untrusted):\n${run.synthesis?.masterDocument ?? ""}` : undefined,
-        signal: opts.signal, budget, onUsage, reasoningEffort: run.reasoningEffort, maxTokens: opts.synthesisMaxTokens,
+        signal: opts.signal, budget: ledger, onUsage, reasoningEffort: run.reasoningEffort, maxTokens: opts.synthesisMaxTokens,
       });
       if (opts.signal.aborted) throw abortError();
       update(opts.secondPass ? { secondPass: synthesis } : { synthesis });

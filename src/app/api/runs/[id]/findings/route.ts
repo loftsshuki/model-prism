@@ -18,7 +18,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const run = await getRun(id, owner);
     if (!run?.snapshot) return privateJson({ error: "Saved review not found" }, 404);
     const snapshot = run.snapshot as RunCheckpoint;
-    if (!snapshot.background && snapshot.synthesis) await recordFindings(snapshot, owner);
+    // Recording is idempotent. Completed background runs are re-indexed here too, so
+    // a tracking failure at the end of the worker heals when the review is opened.
+    if (snapshot.synthesis && (!snapshot.background || snapshot.background.state === "complete")) await recordFindings(snapshot, owner);
     return privateJson({ findings: await listTrackedFindings(id, owner, snapshot.baselineRunId), baselineRunId: snapshot.baselineRunId });
   } catch (error) { return reviewError(error); }
 }

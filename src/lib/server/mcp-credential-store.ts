@@ -1,6 +1,7 @@
 import { neon } from "@neondatabase/serverless";
 import { initDb } from "../db";
 import { decryptCredential, encryptCredential } from "./credentials";
+import { ReviewConflict } from "./background-store";
 
 const ownerPattern = /^[a-f0-9]{64}$/;
 const keyPattern = /^sk-or-[a-zA-Z0-9_-]+$/;
@@ -65,7 +66,10 @@ export async function loadMcpProviderCredential(owner: string) {
   const sql = client();
   const rows = await sql`SELECT credential FROM mcp_provider_credentials WHERE owner_key=${owner}`;
   if (!rows.length) return null;
-  return decryptCredential(String(rows[0].credential), `mcp-openrouter:${owner}`);
+  // A rotated encryption key makes the stored credential unreadable; that needs a
+  // reconnect, not a retry.
+  try { return decryptCredential(String(rows[0].credential), `mcp-openrouter:${owner}`); }
+  catch { throw new ReviewConflict("The saved OpenRouter credential can no longer be read. Reconnect it in Model Prism Settings.", 409); }
 }
 
 export async function deleteMcpProviderCredential(owner: string) {

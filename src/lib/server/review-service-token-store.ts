@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { ReviewConflict } from "./background-store";
 import { neon } from "@neondatabase/serverless";
 import { initDb } from "../db";
 
@@ -43,7 +44,7 @@ function checkTokenId(tokenId: string) {
 function normalizeScopes(scopes: readonly string[]): ReviewServiceScope[] {
   const unique = [...new Set(scopes)];
   if (!unique.length || unique.some(scope => !REVIEW_SERVICE_SCOPES.includes(scope as ReviewServiceScope))) {
-    throw new Error("Invalid Review Fabric service-token scope");
+    throw new ReviewConflict("Invalid Review Fabric service-token scope", 400);
   }
   return unique as ReviewServiceScope[];
 }
@@ -65,13 +66,13 @@ export async function createReviewServiceToken(
 ) {
   checkOwner(owner);
   const cleanLabel = label.trim();
-  if (!cleanLabel || cleanLabel.length > 100) throw new Error("Service token label must be 1-100 characters");
+  if (!cleanLabel || cleanLabel.length > 100) throw new ReviewConflict("Service token label must be 1-100 characters", 400);
   const normalizedScopes = normalizeScopes(scopes);
   await ensureTable();
   const sql = client();
   const count = await sql`SELECT COUNT(*)::int AS count FROM review_service_tokens
     WHERE owner_key=${owner} AND revoked_at IS NULL`;
-  if (Number(count[0]?.count ?? 0) >= 10) throw new Error("Revoke an existing service token before creating another");
+  if (Number(count[0]?.count ?? 0) >= 10) throw new ReviewConflict("Revoke an existing service token before creating another", 409);
 
   const tokenId = `svc_${randomUUID()}`;
   const token = `mp_svc_${randomBytes(32).toString("base64url")}`;
@@ -112,7 +113,17 @@ export async function revokeReviewServiceToken(owner: string, tokenId: string) {
   const rows = await sql`UPDATE review_service_tokens SET revoked_at=NOW()
     WHERE owner_key=${owner} AND token_id=${tokenId} AND revoked_at IS NULL
     RETURNING token_id`;
-  if (!rows.length) throw new Error("Service token not found");
+  if (!rows.length) throw new ReviewConflict("Service token not found", 404);
+}
+
+/** Revoke every live token an account holds (account deleted or banned). Returns how many were revoked. */
+export async function revokeAllReviewServiceTokens(owner: string) {
+  checkOwner(owner);
+  await ensureTable();
+  const sql = client();
+  const rows = await sql`UPDATE review_service_tokens SET revoked_at=NOW()
+    WHERE owner_key=${owner} AND revoked_at IS NULL RETURNING token_id`;
+  return rows.length;
 }
 
 export async function authenticateReviewServiceToken(token: string) {

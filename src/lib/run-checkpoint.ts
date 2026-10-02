@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ModelInfo, ModelResponse, ModelUsage, SynthesisResult } from "./types";
 import { jsonHeaders } from "./client-api";
-import { SourceDocumentSchema, type SourceDocument } from "./review-policy";
+import { fitSources, SourceDocumentSchema, type SourceDocument } from "./review-policy";
 import { DECISION_MODES, type DecisionGateRecord, type DecisionModes } from "./decision-gate";
 
 export interface ReviewInput {
@@ -88,8 +88,15 @@ export async function loadLocalCheckpoint(id?: string): Promise<RunCheckpoint | 
       const request = db.transaction("runs").objectStore("runs").getAll();
       request.onsuccess = () => {
         const candidates = (request.result as Array<RunCheckpoint & { localOwner?: string }>).filter((run) => (run.localOwner ?? "guest") === localOwner && (!id || run.id === id)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-        const result = candidates.find((run) => CheckpointSchema.safeParse(run).success);
-        resolve(result ?? null);
+        // A checkpoint rejected only for its source files is still a paid run: keep it
+        // with the sources trimmed rather than discard it.
+        const usable = (run: RunCheckpoint) => {
+          if (CheckpointSchema.safeParse(run).success) return run;
+          if (!run.sources?.length) return null;
+          const trimmed = { ...run, sources: fitSources(run.sources).sources };
+          return CheckpointSchema.safeParse(trimmed).success ? trimmed : null;
+        };
+        resolve(candidates.map(usable).find((run): run is RunCheckpoint => run !== null) ?? null);
       };
       request.onerror = () => reject(request.error);
     });
@@ -107,9 +114,15 @@ export async function clearLocalCheckpoints() {
     });
   } finally { db.close(); }
 }
+/** The run id is owned by another key/account; the client must continue under a new id. */
+export class OwnerMismatchError extends Error { constructor(message: string) { super(message); this.name = "OwnerMismatchError"; } }
+
 export async function saveRemoteCheckpoint(run: RunCheckpoint) {
   const response = await fetch(`/api/runs/${encodeURIComponent(run.id)}`, { method: "PUT", headers: jsonHeaders(), body: JSON.stringify(run), signal: AbortSignal.timeout(15000) });
-  if (!response.ok) throw new Error(response.status === 409 ? "A newer saved version exists. Reload it before continuing." : `Cloud save failed (${response.status}). Your local checkpoint can still resume.`);
+  if (response.ok) return;
+  const body = await response.json().catch(() => null) as { code?: string; error?: string } | null;
+  if (body?.code === "owner_mismatch") throw new OwnerMismatchError(body.error ?? "This review was saved with a different key or account. Resume to continue it as a new saved review.");
+  throw new Error(response.status === 409 ? "A newer saved version exists. Reload it before continuing." : `Cloud save failed (${response.status}). Your local checkpoint can still resume.`);
 }
 
 export function checkpointMarkdown(run: RunCheckpoint) {

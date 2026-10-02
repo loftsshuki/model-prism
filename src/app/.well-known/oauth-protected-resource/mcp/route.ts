@@ -1,25 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
+import { protectedResourceOptions, protectedResourceResponse } from "@/lib/oauth-resource";
 
-function headers() {
-  return {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Authorization, Content-Type",
-    "Cache-Control": "public, max-age=300",
-  };
+export function GET(req: NextRequest) {
+  return protectedResourceResponse(req.nextUrl.origin);
 }
 
-export async function GET(req: NextRequest) {
-  const origin = req.nextUrl.origin;
-  return NextResponse.json({
-    resource: `${origin}/api/mcp`,
-    authorization_servers: [`${origin}/__clerk`],
-    scopes_supported: ["openid", "profile", "email", "offline_access"],
-    bearer_methods_supported: ["header"],
-    resource_name: "Model Prism MCP",
-  }, { headers: headers() });
-}
-
-export async function OPTIONS() {
-  return new NextResponse(null, { status: 204, headers: headers() });
+export function OPTIONS() {
+  return protectedResourceOptions();
 }

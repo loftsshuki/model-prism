@@ -18,6 +18,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     await saveRunCheckpoint(parsed.data as unknown as RunCheckpoint, owner);
     return NextResponse.json({ saved: true, revision: parsed.data.revision });
   } catch (error) {
+    if (error instanceof Error && error.message === "RUN_OWNER_MISMATCH") {
+      return NextResponse.json({ code: "owner_mismatch", error: "This review was saved with a different key or account. Resume to continue it as a new saved review; completed answers are reused." }, { status: 409 });
+    }
     return NextResponse.json({ error: "Unable to save checkpoint" }, { status: error instanceof Error && error.message === "RUN_CONFLICT" ? 409 : 503 });
   }
 }
