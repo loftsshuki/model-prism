@@ -68,7 +68,8 @@
   },
   "overrides": {
     "@workflow/core": {
-      "nanoid": "5.1.16"
+      "nanoid": "5.1.16",
+      "devalue": "5.9.4"
     },
     "@workflow/world-local": {
       "undici": "7.29.1"
