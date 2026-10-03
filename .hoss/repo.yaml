@@ -37,4 +37,10 @@ context:
     - Preserve per-account review isolation and existing budget gates.
     - Inspect HOSS Review Fabric and Decision Fabric before adding generic portfolio review or decision machinery.
     - Never treat model review as implementation proof or deployment verification.
-  knowledgeConcepts: []
+  # Routing hints only: they add retrieval candidates and never exclude knowledge. Quote-grounded
+  # HOSS proposals pending owner confirmation; evidence per concept in HOSS docs/rollout/fleet-lens-review.md.
+  knowledgeConcepts:
+    - model-evaluation-and-review
+    - ai-cost-governance
+    - developer-tooling
+    - ai-agents-and-orchestration
